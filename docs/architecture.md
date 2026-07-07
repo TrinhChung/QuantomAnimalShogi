@@ -1,0 +1,52 @@
+# Technical architecture
+
+## State and rules
+
+`State` là piece-centric: `board[12]`, `pos[8]`, `mask[8]`, owner/origin bitsets,
+side, turn, terminal/winner và Zobrist hash. `Undo` giữ snapshot nhỏ của state;
+ưu tiên correctness và đảm bảo apply/undo phục hồi chính xác cả hash.
+
+Move tables được precompute cho 5 form, 2 hướng và 12 square. Hand positions giữ
+official source slot `12..19`. Search sinh trực tiếp từ quân trên bàn và trong tay;
+không quét 240 raw action. `apply_move` thực hiện local collapse, automatic
+promotion, capture, propagation, Catch/Try/draw rồi cập nhật hash. Turn count có
+257 Zobrist entries riêng.
+
+Propagation gom Chick và Hen thành lineage CH. Với từng origin side, engine duyệt
+tối đa 24 hoán vị CH/G/E/L, giữ các lineage có support và lặp đến fixed point.
+
+## Stage 1 search
+
+Negamax Alpha-Beta chạy iterative deepening. Timeout được kiểm tra định kỳ; chỉ
+depth hoàn tất mới thay root move. Evaluation gồm terminal, expected material theo
+mask, Lion safety/pressure, Catch/Try threat, mobility, uncertainty, risky Lion
+collapse và tiến độ Try.
+
+Ordering: TT move, immediate Catch/Try, defense trước immediate loss, capture,
+promotion, Lion-candidate reduction, mask collapse, Try progress, killer/history
+và evaluation preview. TT là vector fixed-size, lưu key/depth/score/bound/best/age.
+
+## Dependency boundaries
+
+`core <- rules <- search`; `io` chỉ phụ thuộc core/rules. `exact` phụ thuộc
+core/rules/search và inject một bounded successor reducer qua `SearchOptions`, nên
+Stage 1 không include hoặc gọi trực tiếp code L_eq.
+
+## Stage 2 L_eq
+
+Mỗi legal move được apply và propagate trước khi tạo `CanonKey`. Key chứa board,
+các tuple position/owner/origin/mask, side sau move, turn, terminal và winner.
+Piece labels được sort trong từng origin group; hand-slot labels được canonicalize
+vì không ảnh hưởng luật. Hai physical labels chỉ được gộp khi toàn bộ successor
+semantics trùng nhau. Mỗi class giữ một legal representative để chuyển lại official
+external action `source*12+destination`.
+
+Always-on không phù hợp: các vị trí thông thường không có duplicate nhưng vẫn trả
+chi phí canonicalization. Default dùng trigger:
+
+1. raw branching `L >= threshold` (mặc định 12), và
+2. side-to-move có ít nhất hai hand pieces cùng origin/owner/mask.
+
+`threshold=0` ép always-on để A/B test. Generation cache chưa được thêm: benchmark
+cho thấy trigger rẻ đã loại overhead ở node không có duplicate, còn cache sẽ tăng
+memory/invalidations mà chưa có bằng chứng mang lại lợi ích.

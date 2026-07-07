@@ -1,0 +1,10 @@
+# Build artifacts and generated dependencies
+build/**
+out/**
+cmake-build-*/**
+_deps/**
+
+# Third-party and generated code
+third_party/**
+vendor/**
+generated/**
