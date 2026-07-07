@@ -1,4 +1,5 @@
 #include "core/quantum_state.hpp"
+#include "core/config.hpp"
 #include "search/alpha_beta.hpp"
 #include "io/protocol.hpp"
 #include "exact/equivalence.hpp"
@@ -183,7 +184,55 @@ void print_search_result(const qas::SearchResult& result, std::ostream& output) 
     }
 }
 
-int run_protocol(int time_limit_ms, int max_depth, bool use_leq) {
+qas::SearchOptions search_options(const qas::EngineConfig& config) {
+    qas::SearchOptions options;
+    options.max_depth = config.search.max_depth;
+    options.soft_time_limit_ms = config.search.soft_time_limit_ms;
+    options.hard_time_limit_ms = config.search.hard_time_limit_ms;
+    options.time_limit_ms = config.search.hard_time_limit_ms;
+    options.iterative_deepening_enabled = config.search.iterative_deepening_enabled;
+    options.pvs_enabled = config.search.pvs_enabled;
+    options.aspiration_enabled = config.search.aspiration_enabled;
+    options.aspiration_initial_window = config.search.aspiration_initial_window;
+    options.aspiration_max_retries = config.search.aspiration_max_retries;
+    options.use_tt = config.tt.enabled;
+    options.tt_clear_each_move = config.tt.clear_each_move;
+    options.tt_age_enabled = config.tt.age_enabled;
+    options.killer_enabled = config.move_ordering.killer_enabled;
+    options.history_enabled = config.move_ordering.history_enabled;
+    options.history_decay_interval = config.move_ordering.history_decay_interval;
+    options.tt_move_ordering_enabled = config.move_ordering.tt_move_ordering_enabled;
+    options.immediate_win_ordering_enabled = config.move_ordering.immediate_win_ordering_enabled;
+    options.prevent_loss_ordering_enabled = config.move_ordering.prevent_loss_ordering_enabled;
+    options.capture_ordering_enabled = config.move_ordering.capture_ordering_enabled;
+    options.lion_reduction_ordering_enabled = config.move_ordering.lion_reduction_ordering_enabled;
+    options.try_threat_ordering_enabled = config.move_ordering.try_threat_ordering_enabled;
+    options.mask_collapse_ordering_enabled = config.move_ordering.mask_collapse_ordering_enabled;
+    if (config.search.l_eq_enabled && config.search.l_eq_trigger_enabled) {
+        qas::enable_successor_equivalence(options, config.search.l_eq_min_legal_count,
+                                          config.search.l_eq_require_duplicate_hand_hint);
+        options.reducer_min_depth = config.search.l_eq_min_depth_remaining;
+        options.reducer_disable_low_time = config.safety.disable_l_eq_when_low_time;
+    }
+    return options;
+}
+
+std::size_t tt_cap_for_profile(const std::string& profile) {
+    if (profile == "low_ram" || profile == "local_debug") return 256;
+    if (profile == "contest_safe") return 1024;
+    return 4096;
+}
+
+int run_protocol(const qas::EngineConfig& config) {
+    const auto resources = qas::estimate_resources(config, sizeof(qas::TTEntry), 16,
+                                                    tt_cap_for_profile(config.profile));
+    const std::size_t entries = std::max<std::size_t>(1, resources.tt_entry_count);
+    qas::AlphaBetaEngine engine(entries);
+    qas::SearchOptions options = search_options(config);
+    if (config.instrumentation.stderr_log_enabled) {
+        std::cerr << "profile=" << config.profile << " tt_mb=" << resources.tt_size_mb
+                  << " tt_entries=" << entries << '\n';
+    }
     std::string line;
     while (std::getline(std::cin, line)) {
         try {
@@ -192,11 +241,6 @@ int run_protocol(int time_limit_ms, int max_depth, bool use_leq) {
                 std::cout << "\"OK\"" << std::endl;
                 continue;
             }
-            qas::AlphaBetaEngine engine;
-            qas::SearchOptions options;
-            options.time_limit_ms = time_limit_ms;
-            options.max_depth = max_depth;
-            if (use_leq) qas::enable_successor_equivalence(options);
             const auto result = engine.find_best_move(message.state, options);
             int action = result.has_move ? qas::encode_action_move(result.best_move) : -1;
             if (!qas::action_is_allowed(message, action)) {
@@ -232,12 +276,38 @@ int run_protocol(int time_limit_ms, int max_depth, bool use_leq) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc == 1) return run_protocol(1000, 64, true);
+    std::string profile_override;
+    std::string config_path = "engine_config.json";
+    std::size_t tt_override = 0;
+    bool benchmark_override = false;
+    bool config_override = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "--profile" && index + 1 < argc) profile_override = argv[++index];
+        else if (argument == "--config" && index + 1 < argc) { config_path = argv[++index]; config_override = true; }
+        else if (argument == "--tt-size-mb" && index + 1 < argc) tt_override = std::stoull(argv[++index]);
+        else if (argument == "--benchmark-mode" && index + 1 < argc) benchmark_override = std::stoi(argv[++index]) != 0;
+    }
+    qas::EngineConfig runtime_config;
+    try {
+        runtime_config = qas::load_engine_config(config_path, profile_override);
+    } catch (const std::exception& exception) {
+        std::cerr << "config error: " << exception.what() << '\n';
+        return 1;
+    }
+    if (tt_override != 0) { runtime_config.tt.size_mb = tt_override; runtime_config.tt.auto_size_enabled = false; }
+    if (benchmark_override) runtime_config.instrumentation.benchmark_mode_enabled = true;
+    if (argc == 1 || !profile_override.empty() || config_override || tt_override != 0 || benchmark_override) {
+        return run_protocol(runtime_config);
+    }
     const std::string mode = argv[1];
     if (mode == "protocol") {
-        const int milliseconds = argc >= 3 ? std::stoi(argv[2]) : 1000;
-        const int depth = argc >= 4 ? std::stoi(argv[3]) : 64;
-        return run_protocol(milliseconds, depth, true);
+        if (argc >= 3 && argv[2][0] != '-') {
+            runtime_config.search.soft_time_limit_ms = std::stoi(argv[2]);
+            runtime_config.search.hard_time_limit_ms = runtime_config.search.soft_time_limit_ms + 1000;
+        }
+        if (argc >= 4 && argv[3][0] != '-') runtime_config.search.max_depth = std::stoi(argv[3]);
+        return run_protocol(runtime_config);
     }
     if (mode == "demo") {
         demo(std::cout);

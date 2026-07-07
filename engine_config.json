@@ -1,0 +1,67 @@
+{
+  "profile": "contest_safe",
+  "search": {
+    "max_depth": 64,
+    "soft_time_limit_ms": 25000,
+    "hard_time_limit_ms": 29000,
+    "iterative_deepening_enabled": true,
+    "pvs_enabled": true,
+    "aspiration_enabled": true,
+    "aspiration_initial_window": 50,
+    "aspiration_max_retries": 3,
+    "l_eq_enabled": true,
+    "l_eq_trigger_enabled": true,
+    "l_eq_min_depth_remaining": 2,
+    "l_eq_min_legal_count": 12,
+    "l_eq_require_duplicate_hand_hint": true
+  },
+  "move_ordering": {
+    "tt_move_ordering_enabled": true,
+    "immediate_win_ordering_enabled": true,
+    "prevent_loss_ordering_enabled": true,
+    "capture_ordering_enabled": true,
+    "lion_reduction_ordering_enabled": true,
+    "try_threat_ordering_enabled": true,
+    "mask_collapse_ordering_enabled": true,
+    "killer_enabled": true,
+    "history_enabled": true,
+    "history_decay_interval": 65536
+  },
+  "tt": {
+    "tt_enabled": true,
+    "tt_size_mb": 256,
+    "tt_auto_size_enabled": true,
+    "tt_max_memory_ratio": 0.25,
+    "tt_entry_replace_policy": "depth_age",
+    "tt_clear_each_move": false,
+    "tt_age_enabled": true
+  },
+  "memory": {
+    "memory_profile_enabled": false,
+    "max_total_memory_mb": 1536,
+    "reserve_memory_mb": 512,
+    "generation_cache_enabled": false,
+    "generation_cache_size_mb": 128,
+    "l_eq_cache_enabled": false,
+    "l_eq_cache_size_mb": 128,
+    "use_memory_pool": true,
+    "move_list_pool_enabled": true
+  },
+  "instrumentation": {
+    "debug_counters_enabled": true,
+    "resource_estimation_enabled": false,
+    "benchmark_mode_enabled": false,
+    "per_depth_log_enabled": false,
+    "csv_log_enabled": false,
+    "stderr_log_enabled": true,
+    "log_file_path": "engine_benchmark.csv"
+  },
+  "safety": {
+    "competition_mode": true,
+    "disable_expensive_asserts": true,
+    "disable_resource_estimation_during_search": true,
+    "disable_l_eq_when_low_time": true,
+    "emergency_depth_fallback": true,
+    "safe_fallback_move_enabled": true
+  }
+}

@@ -1,0 +1,11 @@
+profile,mode,position,depth,time_ms,nodes,best_move,score,first_cutoff_rate,avg_cutoff_rank,tt_hit_rate,l_eq_calls,l_eq_dup_ratio,legal
+local_benchmark,AB,initial,4,13.496,1381,p0:9->6,-245,0.668,2.154,0,0,0,1
+local_benchmark,AB+TT,initial,4,8.521,890,p0:9->6,-245,0.711,1.896,0.195,0,0,1
+local_benchmark,AB+TT+PVS,initial,4,6.492,690,p0:9->6,-245,0.787,1.620,0.241,0,0,1
+local_benchmark,AB+TT+PVS+ORDER,initial,4,6.919,702,p0:9->6,-245,0.781,1.642,0.239,0,0,1
+local_benchmark,AB+TT+PVS+ORDER+LEQ,initial,4,7.012,702,p0:9->6,-245,0.781,1.642,0.239,0,0,1
+local_benchmark,AB,duplicate_hands,4,32.192,2622,p2:11->10,36,0.810,1.904,0,0,0,1
+local_benchmark,AB+TT,duplicate_hands,4,31.394,2762,p2:11->10,36,0.805,1.852,0.127,0,0,1
+local_benchmark,AB+TT+PVS,duplicate_hands,4,27.005,2370,p2:11->10,36,0.795,1.956,0.230,0,0,1
+local_benchmark,AB+TT+PVS+ORDER,duplicate_hands,4,24.224,2104,p2:11->10,36,0.834,1.553,0.220,0,0,1
+local_benchmark,AB+TT+PVS+ORDER+LEQ,duplicate_hands,4,19.716,1583,p2:11->10,36,0.823,1.601,0.272,46,0.046,1

@@ -40,6 +40,7 @@ CanonKey canonical_key(const State& state);
 std::vector<SuccessorClass> generate_equivalent_successor_classes(
     const State& state, const std::vector<Move>& legal_moves, const Move& preferred = {});
 
-void enable_successor_equivalence(SearchOptions& options, std::size_t threshold = 12);
+void enable_successor_equivalence(SearchOptions& options, std::size_t threshold = 12,
+                                  bool require_duplicate_hint = true);
 
 }  // namespace qas

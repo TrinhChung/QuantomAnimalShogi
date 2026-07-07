@@ -443,10 +443,9 @@ bool apply_move(State& state, const Move& move, Undo& undo) {
 
 void undo_move(State& state, const Undo& undo) { state = undo.previous; }
 
-std::vector<Move> generate_pseudo_legal_moves(const State& state) {
-    std::vector<Move> moves;
-    if (state.terminal != Terminal::None) return moves;
-    moves.reserve(64);
+void generate_pseudo_legal_moves(const State& state, std::vector<Move>& moves) {
+    moves.clear();
+    if (state.terminal != Terminal::None) return;
     const Side side = state.side_to_move;
     const auto& tables = move_tables();
     for (int piece = 0; piece < physical_piece_count; ++piece) {
@@ -471,12 +470,19 @@ std::vector<Move> generate_pseudo_legal_moves(const State& state) {
                                  static_cast<std::uint8_t>(to)});
         }
     }
+}
+
+std::vector<Move> generate_pseudo_legal_moves(const State& state) {
+    std::vector<Move> moves;
+    moves.reserve(128);
+    generate_pseudo_legal_moves(state, moves);
     return moves;
 }
 
-std::vector<Move> generate_legal_moves(const State& state) {
-    const auto candidates = generate_pseudo_legal_moves(state);
-    std::vector<Move> legal;
+void generate_legal_moves(const State& state, std::vector<Move>& legal,
+                          std::vector<Move>& candidates) {
+    generate_pseudo_legal_moves(state, candidates);
+    legal.clear();
     legal.reserve(candidates.size());
     State copy = state;
     for (const Move& move : candidates) {
@@ -484,6 +490,14 @@ std::vector<Move> generate_legal_moves(const State& state) {
         if (apply_move(copy, move, undo)) legal.push_back(move);
         copy = state;
     }
+}
+
+std::vector<Move> generate_legal_moves(const State& state) {
+    std::vector<Move> candidates;
+    std::vector<Move> legal;
+    candidates.reserve(128);
+    legal.reserve(128);
+    generate_legal_moves(state, legal, candidates);
     return legal;
 }
 

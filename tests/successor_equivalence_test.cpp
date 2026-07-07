@@ -102,6 +102,7 @@ void test_search_equivalence() {
     baseline_options.time_limit_ms = 60'000;
     qas::SearchOptions equivalent_options = baseline_options;
     qas::enable_successor_equivalence(equivalent_options, 0);
+    equivalent_options.reducer_min_depth = 1;
     const auto ab1 = baseline.find_best_move(state, baseline_options);
     const auto leq1 = equivalent.find_best_move(state, equivalent_options);
     check(ab1.score == leq1.score, "depth-1 AB and L_eq root values match");

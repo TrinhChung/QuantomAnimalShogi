@@ -83,6 +83,33 @@ void test_tt_preserves_value_and_hits() {
     check(cached.stats.tt_hits > 0, "iterative deepening produces TT hits");
 }
 
+qas::SearchResult configured_search(const qas::State& state, int depth, bool pvs,
+                                    bool aspiration) {
+    qas::AlphaBetaEngine engine(1U << 16U);
+    qas::SearchOptions options;
+    options.max_depth = depth;
+    options.time_limit_ms = 60'000;
+    options.soft_time_limit_ms = 60'000;
+    options.hard_time_limit_ms = 60'000;
+    options.pvs_enabled = pvs;
+    options.aspiration_enabled = aspiration;
+    options.use_tt = true;
+    return engine.find_best_move(state, options);
+}
+
+void test_pvs_and_aspiration_equivalence() {
+    const qas::State state = qas::initial_state();
+    for (int depth = 1; depth <= 3; ++depth) {
+        const auto alpha_beta = configured_search(state, depth, false, false);
+        const auto pvs = configured_search(state, depth, true, false);
+        const auto aspiration = configured_search(state, depth, true, true);
+        check(alpha_beta.score == pvs.score, "PVS matches Alpha-Beta fixed-depth score");
+        check(pvs.score == aspiration.score, "aspiration retry preserves full-window score");
+        check(is_legal(state, pvs.best_move) && is_legal(state, aspiration.best_move),
+              "PVS and aspiration return legal root moves");
+    }
+}
+
 void test_timeout_fallback() {
     const qas::State state = qas::initial_state();
     qas::AlphaBetaEngine engine(1U << 14U);
@@ -132,6 +159,7 @@ int main() {
     test_depths_are_legal_and_non_mutating();
     test_immediate_catch();
     test_tt_preserves_value_and_hits();
+    test_pvs_and_aspiration_equivalence();
     test_timeout_fallback();
     test_injected_stop_keeps_completed_depth();
     test_turn_changes_search_key();

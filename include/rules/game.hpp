@@ -76,6 +76,9 @@ void undo_move(State& state, const Undo& undo);
 
 std::vector<Move> generate_pseudo_legal_moves(const State& state);
 std::vector<Move> generate_legal_moves(const State& state);
+void generate_pseudo_legal_moves(const State& state, std::vector<Move>& output);
+void generate_legal_moves(const State& state, std::vector<Move>& output,
+                          std::vector<Move>& scratch);
 bool is_square_attacked(const State& state, int square, Side by_side);
 bool is_immediate_winning_move(const State& state, const Move& move);
 

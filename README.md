@@ -9,6 +9,8 @@ Search is delivered in two verified stages:
    ordering, killer/history heuristics and a fixed-size transposition table.
 2. L_eq canonical successor grouping, injected from `exact/` only after the
    baseline tests pass.
+3. Resource-aware AB+TT+PVS with aspiration windows, strong ordering and runtime
+   profiles.
 
 No ML, GPU, network, paid dependency or background worker is used.
 
@@ -30,6 +32,9 @@ Run without arguments (or use `protocol`) and send one JSON value per line:
 ```powershell
 .\build\qas.exe
 .\build\qas.exe protocol 1000 64
+.\build\qas.exe --profile contest_safe
+.\build\qas.exe --profile contest_high_ram --tt-size-mb 2048
+.\build\qas.exe --profile low_ram --tt-size-mb 128
 ```
 
 - `get_action`: stdout contains exactly one integer in `0..239`.
@@ -94,6 +99,9 @@ The debug state format starts with `side turn`, followed by eight lines:
 - [Architecture note](docs/architecture.md)
 - [Stage 1 benchmark](reports/stage1-benchmark.md)
 - [Stage 2 benchmark](reports/stage2-benchmark.md)
+- [Stage 3 benchmark](reports/stage3-benchmark.md)
+- [RAM/TT benchmark](reports/ram-benchmark.md)
+- [Stage 3 recommendation](docs/stage3-recommendation.md)
 
 All tests pass under GCC 16.1 with
 `-O3 -Wall -Wextra -Wpedantic -Werror`. The protocol generator/action-mask test

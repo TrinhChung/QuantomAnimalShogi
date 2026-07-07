@@ -49,9 +49,10 @@ bool has_duplicate_drop_hint(const State& state) {
 
 std::vector<Move> reduce_successors(const State& state, const std::vector<Move>& legal_moves,
                                     const Move& preferred, std::size_t threshold,
-                                    bool& applied) {
-    const bool trigger = threshold == 0 || has_duplicate_drop_hint(state);
-    applied = legal_moves.size() >= threshold && trigger;
+                                    int min_depth, int depth_remaining, bool require_hint,
+                                    bool low_time, bool& applied) {
+    const bool trigger = !require_hint || threshold == 0 || has_duplicate_drop_hint(state);
+    applied = !low_time && depth_remaining >= min_depth && legal_moves.size() >= threshold && trigger;
     if (!applied) return legal_moves;
     const auto classes = generate_equivalent_successor_classes(state, legal_moves, preferred);
     std::vector<Move> representatives;
@@ -132,9 +133,11 @@ std::vector<SuccessorClass> generate_equivalent_successor_classes(
     return classes;
 }
 
-void enable_successor_equivalence(SearchOptions& options, std::size_t threshold) {
+void enable_successor_equivalence(SearchOptions& options, std::size_t threshold,
+                                  bool require_duplicate_hint) {
     options.successor_reducer = reduce_successors;
     options.reducer_threshold = threshold;
+    options.reducer_require_duplicate_hint = require_duplicate_hint;
 }
 
 }  // namespace qas
