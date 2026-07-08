@@ -1,12 +1,12 @@
 #pragma once
 
-#include "rules/game.hpp"
-#include "search/alpha_beta.hpp"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include "rules/game.hpp"
+#include "search/alpha_beta.hpp"
 
 namespace qas {
 
@@ -38,9 +38,13 @@ CanonKey canonical_key(const State& state);
 
 // Every input must already be legal. apply_move performs propagation before keying.
 std::vector<SuccessorClass> generate_equivalent_successor_classes(
-    const State& state, const std::vector<Move>& legal_moves, const Move& preferred = {});
+    const State& state,
+    const std::vector<Move>& legal_moves,
+    const Move& preferred = {},
+    SuccessorReductionStats* stats = nullptr);
 
-void enable_successor_equivalence(SearchOptions& options, std::size_t threshold = 12,
+void enable_successor_equivalence(SearchOptions& options,
+                                  std::size_t threshold = 12,
                                   bool require_duplicate_hint = true);
 
 }  // namespace qas

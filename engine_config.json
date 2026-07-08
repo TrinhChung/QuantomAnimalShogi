@@ -11,8 +11,9 @@
     "aspiration_max_retries": 3,
     "l_eq_enabled": true,
     "l_eq_trigger_enabled": true,
-    "l_eq_min_depth_remaining": 2,
-    "l_eq_min_legal_count": 12,
+    "l_eq_min_depth_remaining": 4,
+    "l_eq_min_legal_count": 24,
+    "l_eq_min_duplicate_ratio": 0.25,
     "l_eq_require_duplicate_hand_hint": true
   },
   "move_ordering": {
@@ -30,6 +31,7 @@
   "tt": {
     "tt_enabled": true,
     "tt_size_mb": 256,
+    "tt_max_size_mb": 1024,
     "tt_auto_size_enabled": true,
     "tt_max_memory_ratio": 0.25,
     "tt_entry_replace_policy": "depth_age",
@@ -54,6 +56,8 @@
     "per_depth_log_enabled": false,
     "csv_log_enabled": false,
     "stderr_log_enabled": true,
+    "tt_matrix_enabled": false,
+    "benchmark_repeat_count": 7,
     "log_file_path": "engine_benchmark.csv"
   },
   "safety": {

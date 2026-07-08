@@ -1,15 +1,15 @@
-#include "core/quantum_state.hpp"
-#include "core/config.hpp"
-#include "search/alpha_beta.hpp"
-#include "io/protocol.hpp"
-#include "exact/equivalence.hpp"
-
 #include <exception>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+
+#include "core/config.hpp"
+#include "core/quantum_state.hpp"
+#include "exact/equivalence.hpp"
+#include "io/protocol.hpp"
+#include "search/alpha_beta.hpp"
 
 namespace {
 
@@ -127,8 +127,7 @@ int solve(std::istream& input, std::ostream& output, std::ostream& error) {
         try {
             apply_operation(state, line);
         } catch (const qas::Contradiction& exception) {
-            output << "IMPOSSIBLE at operation " << operation << ": " << exception.what()
-                   << '\n';
+            output << "IMPOSSIBLE at operation " << operation << ": " << exception.what() << '\n';
             return 2;
         } catch (const std::exception& exception) {
             error << "invalid operation " << operation << ": " << exception.what() << '\n';
@@ -209,23 +208,19 @@ qas::SearchOptions search_options(const qas::EngineConfig& config) {
     options.try_threat_ordering_enabled = config.move_ordering.try_threat_ordering_enabled;
     options.mask_collapse_ordering_enabled = config.move_ordering.mask_collapse_ordering_enabled;
     if (config.search.l_eq_enabled && config.search.l_eq_trigger_enabled) {
-        qas::enable_successor_equivalence(options, config.search.l_eq_min_legal_count,
+        qas::enable_successor_equivalence(options,
+                                          config.search.l_eq_min_legal_count,
                                           config.search.l_eq_require_duplicate_hand_hint);
         options.reducer_min_depth = config.search.l_eq_min_depth_remaining;
+        options.reducer_min_duplicate_ratio = config.search.l_eq_min_duplicate_ratio;
         options.reducer_disable_low_time = config.safety.disable_l_eq_when_low_time;
     }
     return options;
 }
 
-std::size_t tt_cap_for_profile(const std::string& profile) {
-    if (profile == "low_ram" || profile == "local_debug") return 256;
-    if (profile == "contest_safe") return 1024;
-    return 4096;
-}
-
 int run_protocol(const qas::EngineConfig& config) {
-    const auto resources = qas::estimate_resources(config, sizeof(qas::TTEntry), 16,
-                                                    tt_cap_for_profile(config.profile));
+    const auto resources =
+        qas::estimate_resources(config, sizeof(qas::TTEntry), 16, config.tt.max_size_mb);
     const std::size_t entries = std::max<std::size_t>(1, resources.tt_entry_count);
     qas::AlphaBetaEngine engine(entries);
     qas::SearchOptions options = search_options(config);
@@ -283,10 +278,15 @@ int main(int argc, char** argv) {
     bool config_override = false;
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
-        if (argument == "--profile" && index + 1 < argc) profile_override = argv[++index];
-        else if (argument == "--config" && index + 1 < argc) { config_path = argv[++index]; config_override = true; }
-        else if (argument == "--tt-size-mb" && index + 1 < argc) tt_override = std::stoull(argv[++index]);
-        else if (argument == "--benchmark-mode" && index + 1 < argc) benchmark_override = std::stoi(argv[++index]) != 0;
+        if (argument == "--profile" && index + 1 < argc)
+            profile_override = argv[++index];
+        else if (argument == "--config" && index + 1 < argc) {
+            config_path = argv[++index];
+            config_override = true;
+        } else if (argument == "--tt-size-mb" && index + 1 < argc)
+            tt_override = std::stoull(argv[++index]);
+        else if (argument == "--benchmark-mode" && index + 1 < argc)
+            benchmark_override = std::stoi(argv[++index]) != 0;
     }
     qas::EngineConfig runtime_config;
     try {
@@ -295,18 +295,25 @@ int main(int argc, char** argv) {
         std::cerr << "config error: " << exception.what() << '\n';
         return 1;
     }
-    if (tt_override != 0) { runtime_config.tt.size_mb = tt_override; runtime_config.tt.auto_size_enabled = false; }
-    if (benchmark_override) runtime_config.instrumentation.benchmark_mode_enabled = true;
-    if (argc == 1 || !profile_override.empty() || config_override || tt_override != 0 || benchmark_override) {
+    if (tt_override != 0) {
+        runtime_config.tt.size_mb = tt_override;
+        runtime_config.tt.auto_size_enabled = false;
+    }
+    if (benchmark_override)
+        runtime_config.instrumentation.benchmark_mode_enabled = true;
+    if (argc == 1 || !profile_override.empty() || config_override || tt_override != 0 ||
+        benchmark_override) {
         return run_protocol(runtime_config);
     }
     const std::string mode = argv[1];
     if (mode == "protocol") {
         if (argc >= 3 && argv[2][0] != '-') {
             runtime_config.search.soft_time_limit_ms = std::stoi(argv[2]);
-            runtime_config.search.hard_time_limit_ms = runtime_config.search.soft_time_limit_ms + 1000;
+            runtime_config.search.hard_time_limit_ms =
+                runtime_config.search.soft_time_limit_ms + 1000;
         }
-        if (argc >= 4 && argv[3][0] != '-') runtime_config.search.max_depth = std::stoi(argv[3]);
+        if (argc >= 4 && argv[3][0] != '-')
+            runtime_config.search.max_depth = std::stoi(argv[3]);
         return run_protocol(runtime_config);
     }
     if (mode == "demo") {
@@ -329,8 +336,10 @@ int main(int argc, char** argv) {
     }
     if (mode == "search" || mode == "search-leq") {
         qas::SearchOptions options;
-        if (argc >= 3) options.time_limit_ms = std::stoi(argv[2]);
-        if (argc >= 4) options.max_depth = std::stoi(argv[3]);
+        if (argc >= 3)
+            options.time_limit_ms = std::stoi(argv[2]);
+        if (argc >= 4)
+            options.max_depth = std::stoi(argv[3]);
         if (mode == "search-leq") {
             const std::size_t threshold =
                 argc >= 5 ? static_cast<std::size_t>(std::stoul(argv[4])) : 12;
@@ -350,8 +359,7 @@ int main(int argc, char** argv) {
         try {
             const qas::State state = qas::parse_state(std::cin);
             for (const qas::Move& move : qas::generate_legal_moves(state)) {
-                std::cout << qas::encode_action_move(move) << ' ' << qas::move_string(move)
-                          << '\n';
+                std::cout << qas::encode_action_move(move) << ' ' << qas::move_string(move) << '\n';
             }
             return 0;
         } catch (const std::exception& exception) {

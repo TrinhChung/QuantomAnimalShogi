@@ -1,12 +1,12 @@
 #pragma once
 
-#include "core/animal.hpp"
-
 #include <array>
 #include <cstdint>
 #include <iosfwd>
 #include <string>
 #include <vector>
+
+#include "core/animal.hpp"
 
 namespace qas {
 
@@ -39,12 +39,12 @@ struct State {
     std::array<std::int8_t, board_size> board{};
     std::array<std::uint8_t, physical_piece_count> pos{};
     std::array<Mask, physical_piece_count> mask{};
-    std::uint8_t owner_bits{0};       // bit=1 means North
-    std::uint8_t origin_bits{0};      // immutable lineage group; bit=1 means North
+    std::uint8_t owner_bits{0};   // bit=1 means North
+    std::uint8_t origin_bits{0};  // immutable lineage group; bit=1 means North
     Side side_to_move{Side::South};
     std::uint16_t turn{0};
     Terminal terminal{Terminal::None};
-    std::int8_t winner{-1};           // 0 South, 1 North, -1 none
+    std::int8_t winner{-1};  // 0 South, 1 North, -1 none
     std::uint64_t hash{0};
 };
 
@@ -52,15 +52,18 @@ struct Undo {
     State previous{};
 };
 
+struct RuleMetrics {
+    std::uint64_t propagation_calls{0};
+    double propagation_ms{0.0};
+};
+
 struct MoveTables {
     // [form][side][square] -> destination bitboard
     std::array<std::array<std::array<std::uint16_t, board_size>, 2>, 5> move_table{};
     // [mask][side][square] -> union destination bitboard
-    std::array<std::array<std::array<std::uint16_t, board_size>, 2>, 32>
-        quantum_move_table{};
+    std::array<std::array<std::array<std::uint16_t, board_size>, 2>, 32> quantum_move_table{};
     // [side][source][destination] -> forms capable of the move
-    std::array<std::array<std::array<Mask, board_size>, board_size>, 2>
-        move_possible_mask{};
+    std::array<std::array<std::array<Mask, board_size>, board_size>, 2> move_possible_mask{};
 };
 
 const MoveTables& move_tables();
@@ -72,12 +75,14 @@ void recompute_hash(State& state);
 std::uint64_t zobrist_hash(const State& state);
 
 bool apply_move(State& state, const Move& move, Undo& undo);
+bool apply_move_profiled(State& state, const Move& move, Undo& undo, RuleMetrics& metrics);
 void undo_move(State& state, const Undo& undo);
 
 std::vector<Move> generate_pseudo_legal_moves(const State& state);
 std::vector<Move> generate_legal_moves(const State& state);
 void generate_pseudo_legal_moves(const State& state, std::vector<Move>& output);
-void generate_legal_moves(const State& state, std::vector<Move>& output,
+void generate_legal_moves(const State& state,
+                          std::vector<Move>& output,
                           std::vector<Move>& scratch);
 bool is_square_attacked(const State& state, int square, Side by_side);
 bool is_immediate_winning_move(const State& state, const Move& move);

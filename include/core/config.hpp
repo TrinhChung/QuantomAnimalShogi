@@ -17,8 +17,9 @@ struct SearchConfig {
     int aspiration_max_retries{3};
     bool l_eq_enabled{true};
     bool l_eq_trigger_enabled{true};
-    int l_eq_min_depth_remaining{2};
-    std::size_t l_eq_min_legal_count{12};
+    int l_eq_min_depth_remaining{4};
+    std::size_t l_eq_min_legal_count{24};
+    double l_eq_min_duplicate_ratio{0.25};
     bool l_eq_require_duplicate_hand_hint{true};
 };
 
@@ -38,6 +39,7 @@ struct MoveOrderingConfig {
 struct TranspositionConfig {
     bool enabled{true};
     std::size_t size_mb{256};
+    std::size_t max_size_mb{4096};
     bool auto_size_enabled{true};
     double max_memory_ratio{0.25};
     std::string entry_replace_policy{"depth_age"};
@@ -64,6 +66,8 @@ struct InstrumentationConfig {
     bool per_depth_log_enabled{false};
     bool csv_log_enabled{false};
     bool stderr_log_enabled{true};
+    bool tt_matrix_enabled{false};
+    int benchmark_repeat_count{7};
     std::string log_file_path{"engine_benchmark.csv"};
 };
 
@@ -97,7 +101,8 @@ struct ResourceEstimate {
 EngineConfig profile_config(const std::string& profile);
 EngineConfig load_engine_config(const std::string& path, const std::string& profile_override = {});
 std::size_t detect_physical_ram_mb();
-ResourceEstimate estimate_resources(const EngineConfig& config, std::size_t tt_entry_size,
+ResourceEstimate estimate_resources(const EngineConfig& config,
+                                    std::size_t tt_entry_size,
                                     std::size_t min_tt_mb = 16,
                                     std::size_t max_tt_mb = 4096);
 

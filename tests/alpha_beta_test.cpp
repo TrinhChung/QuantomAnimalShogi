@@ -17,18 +17,23 @@ void check(bool condition, const std::string& message) {
 }
 
 void place(qas::State& state, int piece, int square) {
-    if (state.pos[piece] < qas::board_size) state.board[state.pos[piece]] = -1;
+    if (state.pos[piece] < qas::board_size)
+        state.board[state.pos[piece]] = -1;
     state.pos[piece] = static_cast<std::uint8_t>(square);
-    if (square < qas::board_size) state.board[square] = static_cast<std::int8_t>(piece);
+    if (square < qas::board_size)
+        state.board[square] = static_cast<std::int8_t>(piece);
 }
 
 qas::State catch_position() {
     qas::State state = qas::initial_state();
-    state.mask = {
-        qas::bit(qas::Animal::Giraffe), qas::bit(qas::Animal::Chick),
-        qas::bit(qas::Animal::Elephant), qas::bit(qas::Animal::Lion),
-        qas::bit(qas::Animal::Lion), qas::bit(qas::Animal::Chick),
-        qas::bit(qas::Animal::Giraffe), qas::bit(qas::Animal::Elephant)};
+    state.mask = {qas::bit(qas::Animal::Giraffe),
+                  qas::bit(qas::Animal::Chick),
+                  qas::bit(qas::Animal::Elephant),
+                  qas::bit(qas::Animal::Lion),
+                  qas::bit(qas::Animal::Lion),
+                  qas::bit(qas::Animal::Chick),
+                  qas::bit(qas::Animal::Giraffe),
+                  qas::bit(qas::Animal::Elephant)};
     state.board.fill(-1);
     for (int piece = 0; piece < qas::physical_piece_count; ++piece) {
         state.pos[piece] = static_cast<std::uint8_t>(qas::first_hand_slot + piece);
@@ -67,8 +72,7 @@ void test_immediate_catch() {
     const qas::State state = catch_position();
     const auto result = engine.search_fixed_depth(state, 2, true);
     check(result.has_move, "Catch position returns a move");
-    check(result.best_move == qas::Move{0, 4, 1},
-          "Alpha-Beta chooses immediate winning Catch");
+    check(result.best_move == qas::Move{0, 4, 1}, "Alpha-Beta chooses immediate winning Catch");
     check(result.score >= qas::mate_score - 4, "Catch receives mate score");
 }
 
@@ -83,8 +87,7 @@ void test_tt_preserves_value_and_hits() {
     check(cached.stats.tt_hits > 0, "iterative deepening produces TT hits");
 }
 
-qas::SearchResult configured_search(const qas::State& state, int depth, bool pvs,
-                                    bool aspiration) {
+qas::SearchResult configured_search(const qas::State& state, int depth, bool pvs, bool aspiration) {
     qas::AlphaBetaEngine engine(1U << 16U);
     qas::SearchOptions options;
     options.max_depth = depth;
@@ -140,6 +143,30 @@ void test_injected_stop_keeps_completed_depth() {
     check(result.stats.depth_reached == 1, "injected stop rejects the incomplete next depth");
     check(result.best_move == depth_one.best_move && result.score == depth_one.score,
           "injected stop retains the last fully completed depth result");
+    check(result.stats.timeout_hit && result.stats.timeout_depth == 2,
+          "injected stop records the interrupted depth");
+}
+
+void test_benchmark_instrumentation_and_pv() {
+    const qas::State state = qas::initial_state();
+    qas::AlphaBetaEngine engine(1U << 14U);
+    qas::SearchOptions options;
+    options.max_depth = 2;
+    options.time_limit_ms = 60'000;
+    options.soft_time_limit_ms = 60'000;
+    options.hard_time_limit_ms = 60'000;
+    options.iterative_deepening_enabled = false;
+    options.aspiration_enabled = false;
+    options.benchmark_instrumentation_enabled = true;
+    const auto result = engine.find_best_move(state, options);
+    check(result.stats.depth_reached == 2, "instrumented fixed-depth search completes");
+    check(result.stats.movegen_calls > 0 && result.stats.eval_calls > 0,
+          "benchmark-only movegen and evaluation counters are populated");
+    check(result.stats.propagation_calls > 0, "benchmark-only propagation counters are populated");
+    check(result.stats.max_legal_moves >= result.stats.average_legal_moves(),
+          "maximum legal count bounds the average");
+    check(!result.pv_line.empty() && result.pv_line.front() == result.best_move,
+          "reported PV begins with the legal root move");
 }
 
 void test_turn_changes_search_key() {
@@ -162,6 +189,7 @@ int main() {
     test_pvs_and_aspiration_equivalence();
     test_timeout_fallback();
     test_injected_stop_keeps_completed_depth();
+    test_benchmark_instrumentation_and_pv();
     test_turn_changes_search_key();
     if (failures != 0) {
         std::cerr << failures << " search test(s) failed\n";

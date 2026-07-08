@@ -1,6 +1,9 @@
 /build/
+/build_stage35*/
 /.cache/
 *.exe
 *.obj
 *.o
 *.pdb
+
+local_reports/

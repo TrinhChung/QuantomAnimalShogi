@@ -1,10 +1,10 @@
-#include "exact/equivalence.hpp"
-#include "search/alpha_beta.hpp"
-
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+
+#include "exact/equivalence.hpp"
+#include "search/alpha_beta.hpp"
 
 namespace {
 
@@ -40,10 +40,14 @@ void swap_piece_labels(qas::State& state, int left, int right) {
     const bool left_owner_north = (state.owner_bits & (1U << left)) != 0;
     const bool right_owner_north = (state.owner_bits & (1U << right)) != 0;
     state.owner_bits &= static_cast<std::uint8_t>(~((1U << left) | (1U << right)));
-    if (left_owner_north) state.owner_bits |= static_cast<std::uint8_t>(1U << right);
-    if (right_owner_north) state.owner_bits |= static_cast<std::uint8_t>(1U << left);
-    if (left_pos < qas::board_size) state.board[left_pos] = static_cast<std::int8_t>(right);
-    if (right_pos < qas::board_size) state.board[right_pos] = static_cast<std::int8_t>(left);
+    if (left_owner_north)
+        state.owner_bits |= static_cast<std::uint8_t>(1U << right);
+    if (right_owner_north)
+        state.owner_bits |= static_cast<std::uint8_t>(1U << left);
+    if (left_pos < qas::board_size)
+        state.board[left_pos] = static_cast<std::int8_t>(right);
+    if (right_pos < qas::board_size)
+        state.board[right_pos] = static_cast<std::int8_t>(left);
     qas::recompute_hash(state);
 }
 
@@ -84,11 +88,11 @@ void test_every_skipped_move_matches_representative() {
     for (const qas::Move& move : legal) {
         qas::State successor = state;
         qas::Undo undo;
-        check(qas::apply_move(successor, move, undo), "raw legal move applies before canonicalizing");
+        check(qas::apply_move(successor, move, undo),
+              "raw legal move applies before canonicalizing");
         const auto key = qas::canonical_key(successor);
-        const auto found = std::find_if(classes.begin(), classes.end(), [&key](const auto& item) {
-            return item.key == key;
-        });
+        const auto found = std::find_if(
+            classes.begin(), classes.end(), [&key](const auto& item) { return item.key == key; });
         check(found != classes.end(), "skipped move key matches a representative key");
     }
 }
@@ -119,12 +123,53 @@ void test_search_equivalence() {
     check(ab2.score == leq2.score, "depth-2 AB and L_eq values match");
 }
 
+void test_trigger_stays_off_on_ordinary_position() {
+    const qas::State state = qas::initial_state();
+    qas::AlphaBetaEngine engine(1U << 14U);
+    qas::SearchOptions options;
+    options.max_depth = 2;
+    options.time_limit_ms = 60'000;
+    options.soft_time_limit_ms = 60'000;
+    options.hard_time_limit_ms = 60'000;
+    options.iterative_deepening_enabled = false;
+    options.aspiration_enabled = false;
+    options.benchmark_instrumentation_enabled = true;
+    qas::enable_successor_equivalence(options, 12, true);
+    const auto result = engine.find_best_move(state, options);
+    check(result.stats.leq_grouped_nodes == 0,
+          "L_eq trigger remains off on the ordinary initial position");
+    check(result.stats.canonicalize_calls == 0, "ordinary search pays no canonicalization cost");
+}
+
+void test_minimum_duplicate_ratio_can_reject_weak_grouping() {
+    const qas::State state = two_equivalent_hand_pieces();
+    qas::AlphaBetaEngine baseline(1U << 14U);
+    qas::AlphaBetaEngine gated(1U << 14U);
+    qas::SearchOptions baseline_options;
+    baseline_options.max_depth = 1;
+    baseline_options.time_limit_ms = 60'000;
+    baseline_options.iterative_deepening_enabled = false;
+    baseline_options.aspiration_enabled = false;
+    qas::SearchOptions gated_options = baseline_options;
+    qas::enable_successor_equivalence(gated_options, 0, false);
+    gated_options.reducer_min_depth = 1;
+    gated_options.reducer_min_duplicate_ratio = 1.0;
+    const auto baseline_result = baseline.find_best_move(state, baseline_options);
+    const auto gated_result = gated.find_best_move(state, gated_options);
+    check(baseline_result.score == gated_result.score,
+          "rejecting weak grouping preserves the Alpha-Beta score");
+    check(gated_result.stats.leq_grouped_nodes == 0,
+          "minimum duplicate ratio can reject a grouping attempt");
+}
+
 }  // namespace
 
 int main() {
     test_canonical_piece_renaming_and_turn();
     test_every_skipped_move_matches_representative();
     test_search_equivalence();
+    test_trigger_stays_off_on_ordinary_position();
+    test_minimum_duplicate_ratio_can_reject_weak_grouping();
     if (failures != 0) {
         std::cerr << failures << " equivalence test(s) failed\n";
         return EXIT_FAILURE;

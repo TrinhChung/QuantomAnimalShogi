@@ -2,14 +2,19 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 
 namespace qas {
 namespace {
 
 constexpr int lineage_count = 4;
 
-int row_of(int square) { return square / board_width; }
-int col_of(int square) { return square % board_width; }
+int row_of(int square) {
+    return square / board_width;
+}
+int col_of(int square) {
+    return square % board_width;
+}
 bool inside(int row, int col) {
     return row >= 0 && row < board_height && col >= 0 && col < board_width;
 }
@@ -72,17 +77,25 @@ struct ZobristTables {
     ZobristTables() {
         std::uint64_t seed = 0x5141535f5a4f4252ULL;
         for (auto& piece : pos) {
-            for (auto& value : piece) value = splitmix64(seed);
+            for (auto& value : piece)
+                value = splitmix64(seed);
         }
         for (auto& piece : mask) {
-            for (auto& value : piece) value = splitmix64(seed);
+            for (auto& value : piece)
+                value = splitmix64(seed);
         }
-        for (auto& value : north_owner) value = splitmix64(seed);
-        for (auto& value : north_origin) value = splitmix64(seed);
-        for (auto& value : side) value = splitmix64(seed);
-        for (auto& value : turn) value = splitmix64(seed);
-        for (auto& value : terminal) value = splitmix64(seed);
-        for (auto& value : winner) value = splitmix64(seed);
+        for (auto& value : north_owner)
+            value = splitmix64(seed);
+        for (auto& value : north_origin)
+            value = splitmix64(seed);
+        for (auto& value : side)
+            value = splitmix64(seed);
+        for (auto& value : turn)
+            value = splitmix64(seed);
+        for (auto& value : terminal)
+            value = splitmix64(seed);
+        for (auto& value : winner)
+            value = splitmix64(seed);
     }
 };
 
@@ -103,7 +116,8 @@ MoveTables build_move_tables() {
                 const int type = static_cast<int>(form);
                 for (int dr = -1; dr <= 1; ++dr) {
                     for (int dc = -1; dc <= 1; ++dc) {
-                        if (dr == 0 && dc == 0) continue;
+                        if (dr == 0 && dc == 0)
+                            continue;
                         bool allowed = false;
                         switch (form) {
                             case Animal::Chick:
@@ -160,11 +174,13 @@ bool propagate_origin(State& state, Side origin) {
     int count = 0;
     for (int piece = 0; piece < physical_piece_count; ++piece) {
         if (originated_from(state, piece, origin)) {
-            if (count >= 4) return false;
+            if (count >= 4)
+                return false;
             ids[count++] = piece;
         }
     }
-    if (count != 4) return false;
+    if (count != 4)
+        return false;
 
     std::array<int, 4> permutation{0, 1, 2, 3};
     std::array<Mask, 4> supported{};
@@ -184,12 +200,14 @@ bool propagate_origin(State& state, Side origin) {
             }
         }
     } while (std::next_permutation(permutation.begin(), permutation.end()));
-    if (!found) return false;
+    if (!found)
+        return false;
 
     for (int index = 0; index < 4; ++index) {
         const int piece = ids[index];
         state.mask[piece] = forms_for_lineages(state.mask[piece], supported[index]);
-        if (state.mask[piece] == 0) return false;
+        if (state.mask[piece] == 0)
+            return false;
     }
     return true;
 }
@@ -199,19 +217,24 @@ bool board_consistent(const State& state) {
     std::array<bool, external_source_count - board_size> hand_seen{};
     for (int square = 0; square < board_size; ++square) {
         const int piece = state.board[square];
-        if (piece < -1 || piece >= physical_piece_count) return false;
+        if (piece < -1 || piece >= physical_piece_count)
+            return false;
         if (piece >= 0) {
-            if (seen[piece] || state.pos[piece] != square) return false;
+            if (seen[piece] || state.pos[piece] != square)
+                return false;
             seen[piece] = true;
         }
     }
     for (int piece = 0; piece < physical_piece_count; ++piece) {
         if (state.pos[piece] < board_size) {
-            if (!seen[piece] || state.board[state.pos[piece]] != piece) return false;
+            if (!seen[piece] || state.board[state.pos[piece]] != piece)
+                return false;
         } else {
-            if (!is_hand_position(state.pos[piece]) || seen[piece]) return false;
+            if (!is_hand_position(state.pos[piece]) || seen[piece])
+                return false;
             const int hand_index = state.pos[piece] - first_hand_slot;
-            if (hand_seen[hand_index]) return false;
+            if (hand_seen[hand_index])
+                return false;
             hand_seen[hand_index] = true;
         }
     }
@@ -220,8 +243,12 @@ bool board_consistent(const State& state) {
 
 }  // namespace
 
-Side opposite(Side side) { return side == Side::South ? Side::North : Side::South; }
-int side_index(Side side) { return side == Side::South ? 0 : 1; }
+Side opposite(Side side) {
+    return side == Side::South ? Side::North : Side::South;
+}
+int side_index(Side side) {
+    return side == Side::South ? 0 : 1;
+}
 
 bool owned_by(const State& state, int piece, Side side) {
     return (((state.owner_bits >> piece) & 1U) != 0) == (side == Side::North);
@@ -257,25 +284,32 @@ State initial_state() {
 
 bool validate_state(const State& state, std::string* error) {
     auto fail = [error](const std::string& message) {
-        if (error != nullptr) *error = message;
+        if (error != nullptr)
+            *error = message;
         return false;
     };
-    if (!board_consistent(state)) return fail("board and piece positions disagree");
+    if (!board_consistent(state))
+        return fail("board and piece positions disagree");
     for (Mask mask : state.mask) {
-        if (mask == 0 || (mask & ~all_form_mask) != 0) return fail("invalid piece mask");
+        if (mask == 0 || (mask & ~all_form_mask) != 0)
+            return fail("invalid piece mask");
     }
     int south_origins = 0;
     int north_origins = 0;
     for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (originated_from(state, piece, Side::South)) ++south_origins;
-        else ++north_origins;
+        if (originated_from(state, piece, Side::South))
+            ++south_origins;
+        else
+            ++north_origins;
     }
     if (south_origins != 4 || north_origins != 4) {
         return fail("each origin side must have four persistent pieces");
     }
     State copy = state;
-    if (!propagate(copy)) return fail("identity constraints are contradictory");
-    if (zobrist_hash(state) != state.hash) return fail("stored Zobrist hash is stale");
+    if (!propagate(copy))
+        return fail("identity constraints are contradictory");
+    if (zobrist_hash(state) != state.hash)
+        return fail("stored Zobrist hash is stale");
     return true;
 }
 
@@ -284,7 +318,8 @@ bool propagate(State& state) {
     while (changed) {
         const auto before = state.mask;
         for (Mask mask : state.mask) {
-            if (mask == 0 || (mask & ~all_form_mask) != 0) return false;
+            if (mask == 0 || (mask & ~all_form_mask) != 0)
+                return false;
         }
         if (!propagate_origin(state, Side::South) || !propagate_origin(state, Side::North)) {
             return false;
@@ -300,8 +335,10 @@ std::uint64_t zobrist_hash(const State& state) {
     for (int piece = 0; piece < physical_piece_count; ++piece) {
         hash ^= tables.pos[piece][state.pos[piece]];
         hash ^= tables.mask[piece][state.mask[piece] & 31U];
-        if (((state.owner_bits >> piece) & 1U) != 0) hash ^= tables.north_owner[piece];
-        if (((state.origin_bits >> piece) & 1U) != 0) hash ^= tables.north_origin[piece];
+        if (((state.owner_bits >> piece) & 1U) != 0)
+            hash ^= tables.north_owner[piece];
+        if (((state.origin_bits >> piece) & 1U) != 0)
+            hash ^= tables.north_origin[piece];
     }
     hash ^= tables.side[side_index(state.side_to_move)];
     hash ^= tables.turn[std::min<std::uint16_t>(state.turn, 256)];
@@ -310,14 +347,18 @@ std::uint64_t zobrist_hash(const State& state) {
     return hash;
 }
 
-void recompute_hash(State& state) { state.hash = zobrist_hash(state); }
+void recompute_hash(State& state) {
+    state.hash = zobrist_hash(state);
+}
 
 bool is_square_attacked(const State& state, int square, Side by_side) {
-    if (square < 0 || square >= board_size) return false;
+    if (square < 0 || square >= board_size)
+        return false;
     const auto& tables = move_tables();
     const int side = side_index(by_side);
     for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (!owned_by(state, piece, by_side) || state.pos[piece] >= board_size) continue;
+        if (!owned_by(state, piece, by_side) || state.pos[piece] >= board_size)
+            continue;
         if ((tables.move_possible_mask[side][state.pos[piece]][square] & state.mask[piece]) != 0) {
             return true;
         }
@@ -330,62 +371,73 @@ namespace {
 int unused_hand_slot(const State& state, int excluded_piece) {
     std::array<bool, external_source_count - board_size> used{};
     for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (piece == excluded_piece || !is_hand_position(state.pos[piece])) continue;
+        if (piece == excluded_piece || !is_hand_position(state.pos[piece]))
+            continue;
         used[state.pos[piece] - first_hand_slot] = true;
     }
     for (int slot = 0; slot < static_cast<int>(used.size()); ++slot) {
-        if (!used[slot]) return first_hand_slot + slot;
+        if (!used[slot])
+            return first_hand_slot + slot;
     }
     return -1;
 }
 
 int lion_candidates_for_origin(const State& state, int target_piece) {
-    const Side origin = originated_from(state, target_piece, Side::South)
-                            ? Side::South
-                            : Side::North;
+    const Side origin =
+        originated_from(state, target_piece, Side::South) ? Side::South : Side::North;
     int count = 0;
     for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (originated_from(state, piece, origin) &&
-            contains(state.mask[piece], Animal::Lion)) {
+        if (originated_from(state, piece, origin) && contains(state.mask[piece], Animal::Lion)) {
             ++count;
         }
     }
     return count;
 }
 
-bool apply_move_internal(State& state, const Move& move, Undo& undo, bool detect_try);
+bool apply_move_internal(
+    State& state, const Move& move, Undo& undo, bool detect_try, RuleMetrics* metrics);
 
-bool can_capture_piece_immediately(const State& state, int target_piece) {
-    if (state.pos[target_piece] >= board_size) return false;
+bool can_capture_piece_immediately(const State& state, int target_piece, RuleMetrics* metrics) {
+    if (state.pos[target_piece] >= board_size)
+        return false;
     for (const Move& reply : generate_pseudo_legal_moves(state)) {
-        if (reply.to != state.pos[target_piece]) continue;
+        if (reply.to != state.pos[target_piece])
+            continue;
         State copy = state;
         Undo undo;
-        if (apply_move_internal(copy, reply, undo, false)) return true;
+        if (apply_move_internal(copy, reply, undo, false, metrics))
+            return true;
     }
     return false;
 }
 
-bool apply_move_internal(State& state, const Move& move, Undo& undo, bool detect_try) {
+bool apply_move_internal(
+    State& state, const Move& move, Undo& undo, bool detect_try, RuleMetrics* metrics) {
     undo.previous = state;
     auto reject = [&state, &undo]() {
         state = undo.previous;
         return false;
     };
-    if (state.terminal != Terminal::None || !move.valid()) return reject();
+    if (state.terminal != Terminal::None || !move.valid())
+        return reject();
     const int piece = move.piece;
     const Side mover = state.side_to_move;
-    if (!owned_by(state, piece, mover) || state.pos[piece] != move.from) return reject();
-    if (state.board[move.to] >= 0 && owned_by(state, state.board[move.to], mover)) return reject();
+    if (!owned_by(state, piece, mover) || state.pos[piece] != move.from)
+        return reject();
+    if (state.board[move.to] >= 0 && owned_by(state, state.board[move.to], mover))
+        return reject();
 
     bool catch_win = false;
     if (is_hand_position(move.from)) {
-        if (state.board[move.to] != -1) return reject();
+        if (state.board[move.to] != -1)
+            return reject();
     } else {
-        if (move.from >= board_size || state.board[move.from] != piece) return reject();
+        if (move.from >= board_size || state.board[move.from] != piece)
+            return reject();
         const Mask movers = move_tables().move_possible_mask[side_index(mover)][move.from][move.to];
         state.mask[piece] &= movers;
-        if (state.mask[piece] == 0) return reject();
+        if (state.mask[piece] == 0)
+            return reject();
 
         if (is_back_rank(move.to, mover) && contains(state.mask[piece], Animal::Chick)) {
             state.mask[piece] &= static_cast<Mask>(~bit(Animal::Chick));
@@ -399,16 +451,20 @@ bool apply_move_internal(State& state, const Move& move, Undo& undo, bool detect
         catch_win = contains(state.mask[captured], Animal::Lion) &&
                     lion_candidates_for_origin(state, captured) == 1;
         const int hand_slot = unused_hand_slot(state, captured);
-        if (hand_slot < 0) return reject();
+        if (hand_slot < 0)
+            return reject();
         state.pos[captured] = static_cast<std::uint8_t>(hand_slot);
-        if (mover == Side::North) state.owner_bits |= static_cast<std::uint8_t>(1U << captured);
-        else state.owner_bits &= static_cast<std::uint8_t>(~(1U << captured));
+        if (mover == Side::North)
+            state.owner_bits |= static_cast<std::uint8_t>(1U << captured);
+        else
+            state.owner_bits &= static_cast<std::uint8_t>(~(1U << captured));
         Mask captured_mask = state.mask[captured];
         if (contains(captured_mask, Animal::Hen)) {
             captured_mask &= static_cast<Mask>(~bit(Animal::Hen));
             captured_mask |= bit(Animal::Chick);
         }
-        if (!catch_win) captured_mask &= static_cast<Mask>(~bit(Animal::Lion));
+        if (!catch_win)
+            captured_mask &= static_cast<Mask>(~bit(Animal::Lion));
         state.mask[captured] = captured_mask;
     }
 
@@ -417,14 +473,26 @@ bool apply_move_internal(State& state, const Move& move, Undo& undo, bool detect
     ++state.turn;
     state.side_to_move = opposite(mover);
 
-    if (!propagate(state)) return reject();
+    bool propagation_succeeded = false;
+    if (metrics != nullptr) {
+        const auto propagation_start = std::chrono::steady_clock::now();
+        propagation_succeeded = propagate(state);
+        const auto propagation_end = std::chrono::steady_clock::now();
+        ++metrics->propagation_calls;
+        metrics->propagation_ms +=
+            std::chrono::duration<double, std::milli>(propagation_end - propagation_start).count();
+    } else {
+        propagation_succeeded = propagate(state);
+    }
+    if (!propagation_succeeded)
+        return reject();
 
     if (catch_win) {
         state.terminal = Terminal::Catch;
         state.winner = static_cast<std::int8_t>(side_index(mover));
     } else if (detect_try && contains(state.mask[piece], Animal::Lion) &&
                is_back_rank(move.to, mover) &&
-               !can_capture_piece_immediately(state, piece)) {
+               !can_capture_piece_immediately(state, piece, metrics)) {
         state.terminal = Terminal::Try;
         state.winner = static_cast<std::int8_t>(side_index(mover));
     } else if (state.turn >= 256) {
@@ -438,18 +506,26 @@ bool apply_move_internal(State& state, const Move& move, Undo& undo, bool detect
 }  // namespace
 
 bool apply_move(State& state, const Move& move, Undo& undo) {
-    return apply_move_internal(state, move, undo, true);
+    return apply_move_internal(state, move, undo, true, nullptr);
 }
 
-void undo_move(State& state, const Undo& undo) { state = undo.previous; }
+bool apply_move_profiled(State& state, const Move& move, Undo& undo, RuleMetrics& metrics) {
+    return apply_move_internal(state, move, undo, true, &metrics);
+}
+
+void undo_move(State& state, const Undo& undo) {
+    state = undo.previous;
+}
 
 void generate_pseudo_legal_moves(const State& state, std::vector<Move>& moves) {
     moves.clear();
-    if (state.terminal != Terminal::None) return;
+    if (state.terminal != Terminal::None)
+        return;
     const Side side = state.side_to_move;
     const auto& tables = move_tables();
     for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (!owned_by(state, piece, side)) continue;
+        if (!owned_by(state, piece, side))
+            continue;
         const int from = state.pos[piece];
         if (is_hand_position(static_cast<std::uint8_t>(from))) {
             for (int to = 0; to < board_size; ++to) {
@@ -461,12 +537,16 @@ void generate_pseudo_legal_moves(const State& state, std::vector<Move>& moves) {
             }
             continue;
         }
-        std::uint16_t destinations = tables.quantum_move_table[state.mask[piece]][side_index(side)][from];
+        std::uint16_t destinations =
+            tables.quantum_move_table[state.mask[piece]][side_index(side)][from];
         for (int to = 0; to < board_size; ++to) {
-            if ((destinations & (1U << to)) == 0) continue;
+            if ((destinations & (1U << to)) == 0)
+                continue;
             const int occupant = state.board[to];
-            if (occupant >= 0 && owned_by(state, occupant, side)) continue;
-            moves.push_back(Move{static_cast<std::uint8_t>(piece), static_cast<std::uint8_t>(from),
+            if (occupant >= 0 && owned_by(state, occupant, side))
+                continue;
+            moves.push_back(Move{static_cast<std::uint8_t>(piece),
+                                 static_cast<std::uint8_t>(from),
                                  static_cast<std::uint8_t>(to)});
         }
     }
@@ -479,7 +559,8 @@ std::vector<Move> generate_pseudo_legal_moves(const State& state) {
     return moves;
 }
 
-void generate_legal_moves(const State& state, std::vector<Move>& legal,
+void generate_legal_moves(const State& state,
+                          std::vector<Move>& legal,
                           std::vector<Move>& candidates) {
     generate_pseudo_legal_moves(state, candidates);
     legal.clear();
@@ -487,7 +568,8 @@ void generate_legal_moves(const State& state, std::vector<Move>& legal,
     State copy = state;
     for (const Move& move : candidates) {
         Undo undo;
-        if (apply_move(copy, move, undo)) legal.push_back(move);
+        if (apply_move(copy, move, undo))
+            legal.push_back(move);
         copy = state;
     }
 }
@@ -504,7 +586,8 @@ std::vector<Move> generate_legal_moves(const State& state) {
 bool is_immediate_winning_move(const State& state, const Move& move) {
     State copy = state;
     Undo undo;
-    if (!apply_move(copy, move, undo)) return false;
+    if (!apply_move(copy, move, undo))
+        return false;
     return copy.terminal == Terminal::Catch || copy.terminal == Terminal::Try;
 }
 

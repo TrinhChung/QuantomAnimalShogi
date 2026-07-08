@@ -62,7 +62,22 @@ Get-Content state.txt | .\build\qas.exe search-leq 1000 8 12
 Get-Content state.txt | .\build\qas.exe legal
 .\build\qas_benchmark_all.exe 4
 .\build\qas_selfplay.exe 20 3
+.\build\qas_stage35_benchmark.exe --generate-fixtures --suite generate
+.\build\qas_stage35_benchmark.exe --suite smoke --repeats 7
+.\build\qas_stage35_benchmark.exe --suite fixed --depths 9,10,11,12 --repeats 7
+.\build\qas_stage35_benchmark.exe --suite iterative --time-limits-ms 5000,10000,30000 --repeats 7
+.\build\qas_stage35_benchmark.exe --suite tt --repeats 7
+.\build\qas_stage35_benchmark.exe --suite fixed --leq-threshold 24 --leq-min-depth 4 --leq-min-duplicate-ratio 0.25
+.\build\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode baseline --repeats 7
+.\build\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode optimized --repeats 7
 ```
+
+The Stage 3.5 runner writes per-run and median rows, applies a hard timeout,
+checks move/action legality and root hash restoration, and records benchmark-only
+search/resource counters. Use `--position-set all` to include the 100 saved random
+fixtures; the default `required` set contains the ten named positions. The full
+all-mode/depth/time/TT matrix is intentionally not the default because it is a
+multi-day sequential workload.
 
 The debug state format starts with `side turn`, followed by eight lines:
 
@@ -100,6 +115,8 @@ The debug state format starts with `side turn`, followed by eight lines:
 - [Stage 1 benchmark](reports/stage1-benchmark.md)
 - [Stage 2 benchmark](reports/stage2-benchmark.md)
 - [Stage 3 benchmark](reports/stage3-benchmark.md)
+- [Stage 3.5 benchmark and tuning report](reports/stage35-benchmark.md)
+- [Stage 4 evaluation optimization report](reports/stage4/summary.md)
 - [RAM/TT benchmark](reports/ram-benchmark.md)
 - [Stage 3 recommendation](docs/stage3-recommendation.md)
 

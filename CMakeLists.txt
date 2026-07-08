@@ -6,9 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(qas_core src/core/quantum_state.cpp src/core/config.cpp src/rules/game.cpp
-                     src/rules/state_text.cpp
-                     src/search/alpha_beta.cpp src/exact/equivalence.cpp
-                     src/io/protocol.cpp)
+                     src/rules/state_text.cpp src/search/alpha_beta.cpp
+                     src/exact/equivalence.cpp src/io/protocol.cpp)
 target_include_directories(qas_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 if(MSVC)
@@ -31,6 +30,14 @@ target_link_libraries(qas_selfplay PRIVATE qas_core)
 
 add_executable(qas_ram_benchmark benchmarks/ram_benchmark.cpp)
 target_link_libraries(qas_ram_benchmark PRIVATE qas_core)
+
+add_executable(qas_stage35_benchmark benchmarks/stage35_benchmark.cpp
+                                     benchmarks/stage35_fixture.cpp)
+target_include_directories(qas_stage35_benchmark PRIVATE benchmarks)
+target_link_libraries(qas_stage35_benchmark PRIVATE qas_core)
+if(WIN32)
+    target_link_libraries(qas_stage35_benchmark PRIVATE psapi)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -57,4 +64,20 @@ if(BUILD_TESTING)
     add_executable(qas_config_tests tests/config_test.cpp)
     target_link_libraries(qas_config_tests PRIVATE qas_core)
     add_test(NAME engine_config COMMAND qas_config_tests)
+
+    add_executable(qas_stage35_fixture_tests tests/stage35_fixture_test.cpp
+                                             benchmarks/stage35_fixture.cpp)
+    target_include_directories(qas_stage35_fixture_tests PRIVATE benchmarks)
+    target_link_libraries(qas_stage35_fixture_tests PRIVATE qas_core)
+    add_test(NAME stage35_fixtures COMMAND qas_stage35_fixture_tests)
+    set_tests_properties(stage35_fixtures PROPERTIES
+                         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    add_executable(qas_eval_optimization_tests tests/evaluation_optimization_test.cpp
+                                               benchmarks/stage35_fixture.cpp)
+    target_include_directories(qas_eval_optimization_tests PRIVATE benchmarks)
+    target_link_libraries(qas_eval_optimization_tests PRIVATE qas_core)
+    add_test(NAME evaluation_optimization COMMAND qas_eval_optimization_tests)
+    set_tests_properties(evaluation_optimization PROPERTIES
+                         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
