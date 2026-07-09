@@ -40,7 +40,7 @@ using Clock = std::chrono::steady_clock;
 
 constexpr std::uint32_t kStage55Seed = 0x55CE'2026U;
 
-enum class LeqMode { Off, Current, Relaxed, Strict };
+enum class LeqMode { Off, Current, Relaxed, Strict, TargetA, TargetB, TargetC, Tactical };
 
 struct CeilingFixture {
     std::string name;
@@ -75,6 +75,9 @@ struct Options {
     int depth_max{11};
     int timeout_ms{30000};
     int tt_mb{512};
+    int shard_count{1};
+    int shard_index{0};
+    std::vector<std::string> fixture_names{};
 };
 
 int popcount(qas::Mask mask) {
@@ -216,6 +219,294 @@ std::size_t floor_power_of_two(std::size_t value) {
 std::size_t tt_entries_from_mb(int tt_mb) {
     const std::size_t bytes = static_cast<std::size_t>(std::max(1, tt_mb)) * 1024ULL * 1024ULL;
     return floor_power_of_two(bytes / sizeof(qas::TTEntry));
+}
+
+bool reaches_try_rank(int square, qas::Side side) {
+    if (square < 0 || square >= qas::board_size)
+        return false;
+    const int row = square / qas::board_width;
+    return row == (side == qas::Side::South ? 0 : qas::board_height - 1);
+}
+
+int benchmark_piece_value(qas::Mask mask) {
+    int total = 0;
+    int count = 0;
+    for (qas::Animal form : qas::all_forms) {
+        if (!qas::contains(mask, form))
+            continue;
+        switch (form) {
+            case qas::Animal::Chick:
+                total += 100;
+                break;
+            case qas::Animal::Giraffe:
+                total += 320;
+                break;
+            case qas::Animal::Elephant:
+                total += 310;
+                break;
+            case qas::Animal::Lion:
+                total += 1050;
+                break;
+            case qas::Animal::Hen:
+                total += 420;
+                break;
+        }
+        ++count;
+    }
+    return count == 0 ? 0 : total / count;
+}
+
+int tactical_representative_score(const qas::State& before,
+                                  const qas::State& after,
+                                  const qas::Move& move,
+                                  const qas::Move& preferred) {
+    if (move == preferred)
+        return 2'000'000;
+    int score = 0;
+    if (after.terminal == qas::Terminal::Catch || after.terminal == qas::Terminal::Try)
+        score += 1'500'000;
+    const int captured = before.board[move.to];
+    if (captured >= 0) {
+        score += 250'000 + benchmark_piece_value(before.mask[captured]) * 20;
+        if (qas::contains(before.mask[captured], qas::Animal::Lion))
+            score += 1'000'000;
+    }
+    const int collapse = popcount(before.mask[move.piece]) - popcount(after.mask[move.piece]);
+    score += collapse * 12'000;
+
+    const qas::Side opponent_after_move = after.side_to_move;
+    score += (lion_candidates(before, opponent_after_move) -
+              lion_candidates(after, opponent_after_move)) *
+             70'000;
+    if (after.pos[move.piece] < qas::board_size &&
+        qas::contains(after.mask[move.piece], qas::Animal::Lion) &&
+        reaches_try_rank(after.pos[move.piece], before.side_to_move)) {
+        score += 30'000;
+    }
+    return score - (static_cast<int>(move.from) * qas::board_size + move.to);
+}
+
+std::vector<qas::Move> representatives_from_classes(
+    const std::vector<qas::SuccessorClass>& classes) {
+    std::vector<qas::Move> representatives;
+    representatives.reserve(classes.size());
+    for (const qas::SuccessorClass& item : classes)
+        representatives.push_back(item.representative);
+    return representatives;
+}
+
+std::vector<qas::SuccessorClass> generate_tactical_successor_classes(
+    const qas::State& state,
+    const std::vector<qas::Move>& legal_moves,
+    const qas::Move& preferred,
+    qas::SuccessorReductionStats* stats) {
+    struct ScoredClass {
+        qas::SuccessorClass item{};
+        int score{std::numeric_limits<int>::min()};
+    };
+    std::vector<ScoredClass> classes;
+    classes.reserve(legal_moves.size());
+    for (const qas::Move& move : legal_moves) {
+        qas::State successor = state;
+        qas::Undo undo;
+        qas::RuleMetrics rule_metrics;
+        const bool applied = stats == nullptr
+                                 ? qas::apply_move(successor, move, undo)
+                                 : qas::apply_move_profiled(successor, move, undo, rule_metrics);
+        if (!applied)
+            continue;
+        if (stats != nullptr) {
+            stats->propagation_calls += rule_metrics.propagation_calls;
+            stats->propagation_ms += rule_metrics.propagation_ms;
+        }
+
+        qas::CanonKey key;
+        if (stats != nullptr) {
+            const auto begin = Clock::now();
+            key = qas::canonical_key(successor);
+            const auto end = Clock::now();
+            ++stats->canonicalize_calls;
+            stats->canonicalize_ms +=
+                std::chrono::duration<double, std::milli>(end - begin).count();
+        } else {
+            key = qas::canonical_key(successor);
+        }
+
+        const int score = tactical_representative_score(state, successor, move, preferred);
+        auto found = std::find_if(classes.begin(), classes.end(), [&key](const ScoredClass& item) {
+            return item.item.key == key;
+        });
+        if (found == classes.end()) {
+            classes.push_back(ScoredClass{qas::SuccessorClass{key, move, 1}, score});
+        } else {
+            ++found->item.multiplicity;
+            if (score > found->score) {
+                found->item.representative = move;
+                found->score = score;
+            }
+        }
+    }
+
+    std::vector<qas::SuccessorClass> result;
+    result.reserve(classes.size());
+    for (const ScoredClass& item : classes)
+        result.push_back(item.item);
+    return result;
+}
+
+std::vector<qas::Move> reduce_successors_for_benchmark(const qas::State& state,
+                                                       const std::vector<qas::Move>& legal_moves,
+                                                       const qas::Move& preferred,
+                                                       std::size_t threshold,
+                                                       int min_depth,
+                                                       int depth_remaining,
+                                                       double minimum_duplicate_ratio,
+                                                       bool require_hint,
+                                                       bool low_time,
+                                                       bool require_two_hand_pieces,
+                                                       bool tactical_representative,
+                                                       bool& applied,
+                                                       qas::SuccessorReductionStats* stats) {
+    applied = false;
+    if (low_time || depth_remaining < min_depth || legal_moves.size() < threshold)
+        return legal_moves;
+    if (require_hint && duplicate_hand_pairs(state) == 0)
+        return legal_moves;
+    if (require_two_hand_pieces && hand_count(state) < 2)
+        return legal_moves;
+
+    applied = true;
+    if (stats != nullptr) {
+        ++stats->attempted_nodes;
+        stats->input_legal_moves += legal_moves.size();
+    }
+
+    const auto classes =
+        tactical_representative
+            ? generate_tactical_successor_classes(state, legal_moves, preferred, stats)
+            : qas::generate_equivalent_successor_classes(state, legal_moves, preferred, stats);
+    if (stats != nullptr) {
+        stats->output_representatives += classes.size();
+        stats->estimated_saved_children += legal_moves.size() - classes.size();
+    }
+
+    const double duplicate_ratio =
+        legal_moves.empty()
+            ? 0.0
+            : 1.0 - static_cast<double>(classes.size()) / static_cast<double>(legal_moves.size());
+    if (duplicate_ratio < minimum_duplicate_ratio) {
+        if (stats != nullptr)
+            ++stats->rollback_low_duplicate_ratio;
+        applied = false;
+        return legal_moves;
+    }
+    return representatives_from_classes(classes);
+}
+
+std::vector<qas::Move> target_a_successor_reducer(const qas::State& state,
+                                                  const std::vector<qas::Move>& legal_moves,
+                                                  const qas::Move& preferred,
+                                                  std::size_t threshold,
+                                                  int min_depth,
+                                                  int depth_remaining,
+                                                  double minimum_duplicate_ratio,
+                                                  bool require_hint,
+                                                  bool low_time,
+                                                  bool& applied,
+                                                  qas::SuccessorReductionStats* stats) {
+    (void)require_hint;
+    return reduce_successors_for_benchmark(state,
+                                           legal_moves,
+                                           preferred,
+                                           threshold,
+                                           min_depth,
+                                           depth_remaining,
+                                           minimum_duplicate_ratio,
+                                           false,
+                                           low_time,
+                                           true,
+                                           false,
+                                           applied,
+                                           stats);
+}
+
+std::vector<qas::Move> target_b_successor_reducer(const qas::State& state,
+                                                  const std::vector<qas::Move>& legal_moves,
+                                                  const qas::Move& preferred,
+                                                  std::size_t threshold,
+                                                  int min_depth,
+                                                  int depth_remaining,
+                                                  double minimum_duplicate_ratio,
+                                                  bool require_hint,
+                                                  bool low_time,
+                                                  bool& applied,
+                                                  qas::SuccessorReductionStats* stats) {
+    return reduce_successors_for_benchmark(state,
+                                           legal_moves,
+                                           preferred,
+                                           threshold,
+                                           min_depth,
+                                           depth_remaining,
+                                           minimum_duplicate_ratio,
+                                           require_hint,
+                                           low_time,
+                                           false,
+                                           false,
+                                           applied,
+                                           stats);
+}
+
+std::vector<qas::Move> target_c_successor_reducer(const qas::State& state,
+                                                  const std::vector<qas::Move>& legal_moves,
+                                                  const qas::Move& preferred,
+                                                  std::size_t threshold,
+                                                  int min_depth,
+                                                  int depth_remaining,
+                                                  double minimum_duplicate_ratio,
+                                                  bool require_hint,
+                                                  bool low_time,
+                                                  bool& applied,
+                                                  qas::SuccessorReductionStats* stats) {
+    (void)require_hint;
+    return reduce_successors_for_benchmark(state,
+                                           legal_moves,
+                                           preferred,
+                                           threshold,
+                                           min_depth,
+                                           depth_remaining,
+                                           minimum_duplicate_ratio,
+                                           false,
+                                           low_time,
+                                           true,
+                                           false,
+                                           applied,
+                                           stats);
+}
+
+std::vector<qas::Move> tactical_successor_reducer(const qas::State& state,
+                                                  const std::vector<qas::Move>& legal_moves,
+                                                  const qas::Move& preferred,
+                                                  std::size_t threshold,
+                                                  int min_depth,
+                                                  int depth_remaining,
+                                                  double minimum_duplicate_ratio,
+                                                  bool require_hint,
+                                                  bool low_time,
+                                                  bool& applied,
+                                                  qas::SuccessorReductionStats* stats) {
+    return reduce_successors_for_benchmark(state,
+                                           legal_moves,
+                                           preferred,
+                                           threshold,
+                                           min_depth,
+                                           depth_remaining,
+                                           minimum_duplicate_ratio,
+                                           require_hint,
+                                           low_time,
+                                           false,
+                                           true,
+                                           applied,
+                                           stats);
 }
 
 std::uint64_t current_peak_rss_mb() {
@@ -505,17 +796,39 @@ const std::vector<std::string>& important_names() {
     return names;
 }
 
+bool name_selected(const Options& options, const std::string& name) {
+    if (options.fixture_names.empty())
+        return true;
+    return std::find(options.fixture_names.begin(), options.fixture_names.end(), name) !=
+           options.fixture_names.end();
+}
+
 std::vector<CeilingFixture> select_fixtures(const std::vector<CeilingFixture>& corpus,
                                             const Options& options) {
     std::vector<CeilingFixture> selected;
-    if (options.full_corpus) {
-        selected = corpus;
+    if (!options.fixture_names.empty()) {
+        for (const std::string& name : options.fixture_names) {
+            const auto found = std::find_if(corpus.begin(), corpus.end(), [&](const auto& fixture) {
+                return fixture.name == name;
+            });
+            if (found != corpus.end())
+                selected.push_back(*found);
+        }
+    } else if (options.full_corpus) {
+        for (std::size_t index = 0; index < corpus.size(); ++index) {
+            if (options.shard_count > 1 &&
+                static_cast<int>(index % static_cast<std::size_t>(options.shard_count)) !=
+                    options.shard_index) {
+                continue;
+            }
+            selected.push_back(corpus[index]);
+        }
     } else {
         for (const std::string& name : important_names()) {
             const auto found = std::find_if(corpus.begin(), corpus.end(), [&](const auto& fixture) {
                 return fixture.name == name;
             });
-            if (found != corpus.end())
+            if (found != corpus.end() && name_selected(options, found->name))
                 selected.push_back(*found);
         }
     }
@@ -577,6 +890,14 @@ std::string leq_mode_name(LeqMode mode) {
             return "relaxed";
         case LeqMode::Strict:
             return "strict";
+        case LeqMode::TargetA:
+            return "target_a";
+        case LeqMode::TargetB:
+            return "target_b";
+        case LeqMode::TargetC:
+            return "target_c";
+        case LeqMode::Tactical:
+            return "tactical_rep";
     }
     return "unknown";
 }
@@ -592,10 +913,34 @@ void apply_leq_mode(qas::SearchOptions& options, LeqMode mode) {
         qas::enable_successor_equivalence(options, 8, false);
         options.reducer_min_depth = 3;
         options.reducer_min_duplicate_ratio = 0.10;
-    } else {
+    } else if (mode == LeqMode::Strict) {
         qas::enable_successor_equivalence(options, 32, true);
         options.reducer_min_depth = 5;
         options.reducer_min_duplicate_ratio = 0.40;
+    } else if (mode == LeqMode::TargetA) {
+        options.successor_reducer = target_a_successor_reducer;
+        options.reducer_threshold = 24;
+        options.reducer_min_depth = 4;
+        options.reducer_min_duplicate_ratio = 0.25;
+        options.reducer_require_duplicate_hint = false;
+    } else if (mode == LeqMode::TargetB) {
+        options.successor_reducer = target_b_successor_reducer;
+        options.reducer_threshold = 28;
+        options.reducer_min_depth = 3;
+        options.reducer_min_duplicate_ratio = 0.0;
+        options.reducer_require_duplicate_hint = true;
+    } else if (mode == LeqMode::TargetC) {
+        options.successor_reducer = target_c_successor_reducer;
+        options.reducer_threshold = 24;
+        options.reducer_min_depth = 4;
+        options.reducer_min_duplicate_ratio = 0.20;
+        options.reducer_require_duplicate_hint = false;
+    } else if (mode == LeqMode::Tactical) {
+        options.successor_reducer = tactical_successor_reducer;
+        options.reducer_threshold = 24;
+        options.reducer_min_depth = 4;
+        options.reducer_min_duplicate_ratio = 0.25;
+        options.reducer_require_duplicate_hint = true;
     }
 }
 
@@ -622,6 +967,10 @@ double rate(std::uint64_t part, std::uint64_t total) {
     return total == 0 ? 0.0 : static_cast<double>(part) / static_cast<double>(total);
 }
 
+double non_negative(double value) {
+    return value < 0.0 ? 0.0 : value;
+}
+
 double leq_duplicate_ratio(const qas::SearchStats& stats) {
     return stats.leq_attempt_input_moves == 0
                ? 0.0
@@ -640,8 +989,19 @@ void write_search_header(std::ofstream& output) {
            "beta_cutoffs,pvs_research_count,aspiration_retries,aspiration_fail_high,"
            "aspiration_fail_low,movegen_ms,legal_filter_ms,apply_move_ms,propagation_ms,"
            "terminal_check_ms,eval_ms,ordering_ms,L_eq_calls,L_eq_ms,L_eq_input_moves,"
-           "L_eq_output_representatives,L_eq_duplicate_ratio,L_eq_rollback_count,peak_rss_mb,"
-           "page_faults,illegal_move_count,cutoff_rank_histogram\n";
+           "L_eq_output_representatives,L_eq_duplicate_ratio,L_eq_rollback_count,"
+           "L_eq_estimated_saved_children,canonicalize_calls,canonicalize_ms,undo_move_calls,"
+           "undo_move_ms,hash_recompute_ms,tt_move_present_rate,tt_move_cutoff_rate,"
+           "tt_move_present,tt_move_cutoffs,move_ordering_calls,immediate_win_ordering_calls,"
+           "prevent_loss_ordering_calls,killer_score_calls,history_score_calls,eval_terminal_ms,"
+           "eval_material_mask_ms,eval_mobility_ms,eval_lion_safety_ms,eval_immediate_setup_ms,"
+           "eval_immediate_movegen_ms,eval_immediate_filter_ms,eval_immediate_transition_ms,"
+           "estimated_exclusive_movegen_ms,estimated_exclusive_legal_filter_ms,"
+           "estimated_exclusive_apply_ms,estimated_exclusive_propagation_ms,"
+           "estimated_exclusive_terminal_ms,estimated_exclusive_eval_ms,"
+           "estimated_exclusive_ordering_ms,estimated_exclusive_tt_ms,"
+           "estimated_exclusive_L_eq_ms,peak_rss_mb,page_faults,illegal_move_count,"
+           "cutoff_rank_histogram\n";
 }
 
 void write_search_row(std::ofstream& output,
@@ -679,6 +1039,24 @@ void write_search_row(std::ofstream& output,
             histogram << ';';
         histogram << stats.cutoff_rank_histogram[index];
     }
+    const double average_apply_ms =
+        rules.apply_move_internal_calls == 0
+            ? 0.0
+            : rules.apply_move_internal_ms / static_cast<double>(rules.apply_move_internal_calls);
+    const double legal_filter_apply_estimate =
+        average_apply_ms * static_cast<double>(rules.legal_filter_apply_calls);
+    const double estimated_exclusive_movegen_ms = rules.pseudo_move_generation_ms;
+    const double estimated_exclusive_legal_filter_ms =
+        non_negative(rules.legal_filter_ms - legal_filter_apply_estimate);
+    const double estimated_exclusive_apply_ms =
+        non_negative(rules.apply_move_internal_ms - stats.propagation_ms - rules.terminal_check_ms -
+                     rules.hash_recompute_ms);
+    const double estimated_exclusive_propagation_ms = stats.propagation_ms;
+    const double estimated_exclusive_terminal_ms = rules.terminal_check_ms;
+    const double estimated_exclusive_eval_ms = stats.eval_ms;
+    const double estimated_exclusive_ordering_ms = stats.move_order_ms;
+    const double estimated_exclusive_tt_ms = 0.0;
+    const double estimated_exclusive_leq_ms = stats.leq_grouping_ms;
 
     output << run << ',' << fixture.name << ',' << fixture.group << ',' << mode << ','
            << leq_mode_name(leq_mode) << ',' << tt_mb << ',' << depth << ',' << time_limit_ms << ','
@@ -703,8 +1081,29 @@ void write_search_row(std::ofstream& output,
            << stats.leq_calls << ',' << stats.leq_grouping_ms << ','
            << stats.leq_attempt_input_moves << ',' << stats.leq_attempt_output_representatives
            << ',' << leq_duplicate_ratio(stats) << ',' << stats.leq_rollback_low_duplicate_ratio
-           << ',' << current_peak_rss_mb() << ',' << current_page_faults() << ',' << illegal_count
-           << ',' << histogram.str() << '\n';
+           << ',' << stats.leq_estimated_saved_children << ',' << stats.canonicalize_calls << ','
+           << stats.canonicalize_ms << ',' << stats.undo_move_calls << ',' << stats.undo_move_ms
+           << ',' << rules.hash_recompute_ms << ','
+           << rate(stats.tt_move_present, stats.move_order_calls) << ','
+           << rate(stats.tt_move_cutoffs, stats.cutoffs) << ',' << stats.tt_move_present << ','
+           << stats.tt_move_cutoffs << ',' << stats.move_order_calls << ','
+           << stats.immediate_win_ordering_calls << ',' << stats.prevent_loss_ordering_calls << ','
+           << stats.killer_score_calls << ',' << stats.history_score_calls << ','
+           << stats.eval_components.terminal.elapsed_ms << ','
+           << stats.eval_components.material_mask.elapsed_ms << ','
+           << stats.eval_components.mobility.elapsed_ms << ','
+           << stats.eval_components.lion_safety.elapsed_ms << ','
+           << stats.eval_components.immediate_setup.elapsed_ms << ','
+           << stats.eval_components.immediate_movegen.elapsed_ms << ','
+           << stats.eval_components.immediate_filter.elapsed_ms << ','
+           << stats.eval_components.immediate_transition.elapsed_ms << ','
+           << estimated_exclusive_movegen_ms << ',' << estimated_exclusive_legal_filter_ms << ','
+           << estimated_exclusive_apply_ms << ',' << estimated_exclusive_propagation_ms << ','
+           << estimated_exclusive_terminal_ms << ',' << estimated_exclusive_eval_ms << ','
+           << estimated_exclusive_ordering_ms << ',' << estimated_exclusive_tt_ms << ','
+           << estimated_exclusive_leq_ms << ',' << current_peak_rss_mb() << ','
+           << current_page_faults() << ',' << illegal_count << ',' << histogram.str() << '\n';
+    output.flush();
 }
 
 qas::SearchResult run_search(const CeilingFixture& fixture,
@@ -716,6 +1115,82 @@ qas::SearchResult run_search(const CeilingFixture& fixture,
     qas::AlphaBetaEngine engine(tt_entries_from_mb(tt_mb));
     return engine.find_best_move(fixture.state,
                                  search_options(depth, timeout_ms, iterative, leq_mode, true));
+}
+
+qas::SearchResult run_search_with_propagation(const CeilingFixture& fixture,
+                                              int depth,
+                                              int timeout_ms,
+                                              qas::PropagationMode propagation_mode,
+                                              int tt_mb) {
+    qas::AlphaBetaEngine engine(tt_entries_from_mb(tt_mb));
+    auto options = search_options(depth, timeout_ms, false, LeqMode::Current, true);
+    options.propagation_mode = propagation_mode;
+    return engine.find_best_move(fixture.state, options);
+}
+
+std::vector<CeilingFixture> validation_fixtures(const std::vector<CeilingFixture>& corpus,
+                                                const Options& options) {
+    if (!options.fixture_names.empty())
+        return select_fixtures(corpus, options);
+
+    static const std::vector<std::string> names{"initial",
+                                                "duplicate_hands",
+                                                "high_uncertainty_midgame",
+                                                "high_branching_hand_stack",
+                                                "random_ply4_18",
+                                                "random_hand_pieces_11",
+                                                "random_duplicate_hands_02"};
+    Options filtered = options;
+    filtered.fixture_names = names;
+    filtered.full_corpus = false;
+    return select_fixtures(corpus, filtered);
+}
+
+void run_validation(const std::vector<CeilingFixture>& corpus, const Options& options) {
+    const auto fixtures = validation_fixtures(corpus, options);
+    std::filesystem::create_directories(options.out_dir);
+    std::ofstream output(std::filesystem::path(options.out_dir) / "shallow_validation.csv");
+    output << "fixture,depth,reference_completed,lut_completed,reference_score,lut_score,"
+              "reference_best,lut_best,reference_nodes,lut_nodes,reference_illegal,lut_illegal,"
+              "passed\n";
+    int failures = 0;
+    for (const CeilingFixture& fixture : fixtures) {
+        for (int depth = 1; depth <= 3; ++depth) {
+            const auto reference =
+                run_search_with_propagation(fixture,
+                                            depth,
+                                            options.timeout_ms,
+                                            qas::PropagationMode::PermutationReference,
+                                            options.tt_mb);
+            const auto lut = run_search_with_propagation(fixture,
+                                                         depth,
+                                                         options.timeout_ms,
+                                                         qas::PropagationMode::LineageLut,
+                                                         options.tt_mb);
+            const bool reference_completed = reference.stats.depth_reached >= depth;
+            const bool lut_completed = lut.stats.depth_reached >= depth;
+            const int reference_illegal = best_move_is_legal(fixture.state, reference) ? 0 : 1;
+            const int lut_illegal = best_move_is_legal(fixture.state, lut) ? 0 : 1;
+            const bool passed = reference_completed && lut_completed &&
+                                reference.score == lut.score &&
+                                reference.has_move == lut.has_move &&
+                                (!reference.has_move || reference.best_move == lut.best_move) &&
+                                reference.stats.searched_nodes == lut.stats.searched_nodes &&
+                                reference_illegal == 0 && lut_illegal == 0;
+            if (!passed)
+                ++failures;
+            output << fixture.name << ',' << depth << ',' << csv_bool(reference_completed) << ','
+                   << csv_bool(lut_completed) << ',' << reference.score << ',' << lut.score << ','
+                   << move_text(reference.best_move) << ',' << move_text(lut.best_move) << ','
+                   << reference.stats.searched_nodes << ',' << lut.stats.searched_nodes << ','
+                   << reference_illegal << ',' << lut_illegal << ',' << csv_bool(passed) << '\n';
+            output.flush();
+            std::cout << "validate fixture=" << fixture.name << " depth=" << depth
+                      << " passed=" << (passed ? "yes" : "no") << '\n';
+        }
+    }
+    if (failures != 0)
+        throw std::runtime_error("shallow validation failures: " + std::to_string(failures));
 }
 
 void run_fixed(const std::vector<CeilingFixture>& fixtures, const Options& options) {
@@ -751,7 +1226,9 @@ void run_fixed(const std::vector<CeilingFixture>& fixtures, const Options& optio
 }
 
 void run_iterative(const std::vector<CeilingFixture>& fixtures, const Options& options) {
-    static constexpr std::array<int, 6> limits{1000, 3000, 5000, 10000, 20000, 30000};
+    std::vector<int> limits{1000, 3000, 5000, 10000, 20000, 30000};
+    if (options.timeout_ms >= 60000)
+        limits.push_back(60000);
     std::filesystem::create_directories(options.out_dir);
     std::ofstream output(std::filesystem::path(options.out_dir) / "iterative.csv");
     write_search_header(output);
@@ -825,37 +1302,70 @@ void run_tt_matrix(const std::vector<CeilingFixture>& fixtures, const Options& o
 }
 
 void run_leq_matrix(const std::vector<CeilingFixture>& fixtures, const Options& options) {
-    static constexpr std::array<LeqMode, 4> modes{
-        LeqMode::Off, LeqMode::Current, LeqMode::Relaxed, LeqMode::Strict};
+    static constexpr std::array<LeqMode, 8> modes{LeqMode::Off,
+                                                  LeqMode::Current,
+                                                  LeqMode::Relaxed,
+                                                  LeqMode::Strict,
+                                                  LeqMode::TargetA,
+                                                  LeqMode::TargetB,
+                                                  LeqMode::TargetC,
+                                                  LeqMode::Tactical};
     std::filesystem::create_directories(options.out_dir);
     std::ofstream output(std::filesystem::path(options.out_dir) / "leq_matrix.csv");
     write_search_header(output);
     for (int run = 1; run <= options.runs; ++run) {
         for (const CeilingFixture& fixture : fixtures) {
             const auto meta = metadata(fixture.state);
-            if (!meta.duplicate_hand_hint && fixture.name != "many_hands" &&
-                fixture.name != "high_branching_hand_stack")
+            if (options.fixture_names.empty() && !meta.duplicate_hand_hint &&
+                fixture.name != "many_hands" && fixture.name != "high_branching_hand_stack")
                 continue;
             for (LeqMode mode : modes) {
-                const auto result =
-                    run_search(fixture, 10, options.timeout_ms, false, mode, options.tt_mb);
+                for (int depth = options.depth_min; depth <= options.depth_max; ++depth) {
+                    const auto result =
+                        run_search(fixture, depth, options.timeout_ms, false, mode, options.tt_mb);
+                    write_search_row(output,
+                                     run,
+                                     fixture,
+                                     "leq",
+                                     mode,
+                                     options.tt_mb,
+                                     depth,
+                                     options.timeout_ms,
+                                     result,
+                                     0);
+                    std::cout << "leq run=" << run << " fixture=" << fixture.name
+                              << " mode=" << leq_mode_name(mode) << " depth=" << depth
+                              << " completed="
+                              << (result.stats.depth_reached >= depth ? "yes" : "no")
+                              << " elapsed_ms=" << result.stats.elapsed_ms << '\n';
+                    if (result.stats.depth_reached < depth)
+                        break;
+                }
+                const auto iterative = run_search(fixture, 64, 30000, true, mode, options.tt_mb);
                 write_search_row(output,
                                  run,
                                  fixture,
-                                 "leq",
+                                 "leq_iterative",
                                  mode,
                                  options.tt_mb,
-                                 10,
-                                 options.timeout_ms,
-                                 result,
+                                 64,
+                                 30000,
+                                 iterative,
                                  0);
-                std::cout << "leq run=" << run << " fixture=" << fixture.name
-                          << " mode=" << leq_mode_name(mode)
-                          << " completed=" << (result.stats.depth_reached >= 10 ? "yes" : "no")
-                          << " elapsed_ms=" << result.stats.elapsed_ms << '\n';
             }
         }
     }
+}
+
+std::vector<std::string> split_names(const std::string& text) {
+    std::vector<std::string> names;
+    std::string current;
+    std::istringstream input(text);
+    while (std::getline(input, current, ',')) {
+        if (!current.empty())
+            names.push_back(current);
+    }
+    return names;
 }
 
 Options parse_options(int argc, char* argv[]) {
@@ -885,9 +1395,17 @@ Options parse_options(int argc, char* argv[]) {
             options.timeout_ms = std::stoi(require_value(arg));
         else if (arg == "--tt-mb")
             options.tt_mb = std::stoi(require_value(arg));
+        else if (arg == "--shard-count")
+            options.shard_count = std::max(1, std::stoi(require_value(arg)));
+        else if (arg == "--shard-index")
+            options.shard_index = std::max(0, std::stoi(require_value(arg)));
+        else if (arg == "--fixtures")
+            options.fixture_names = split_names(require_value(arg));
         else
             throw std::runtime_error("unknown argument: " + arg);
     }
+    if (options.shard_index >= options.shard_count)
+        throw std::runtime_error("--shard-index must be less than --shard-count");
     return options;
 }
 
@@ -900,10 +1418,15 @@ int main(int argc, char* argv[]) {
         write_fixture_files(corpus, options.out_dir);
         const auto selected = select_fixtures(corpus, options);
         std::cout << "Stage 5.5 corpus fixtures=" << corpus.size()
-                  << " selected=" << selected.size() << " out_dir=" << options.out_dir << '\n';
+                  << " selected=" << selected.size() << " out_dir=" << options.out_dir
+                  << " shard=" << options.shard_index << '/' << options.shard_count << '\n';
 
         if (options.mode == "corpus")
             return EXIT_SUCCESS;
+        if (options.mode == "validate") {
+            run_validation(corpus, options);
+            return EXIT_SUCCESS;
+        }
         if (options.mode == "fixed" || options.mode == "quick")
             run_fixed(selected, options);
         if (options.mode == "iterative" || options.mode == "quick")
