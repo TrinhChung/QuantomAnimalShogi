@@ -64,13 +64,23 @@ std::vector<Move> reduce_successors(const State& state,
         !low_time && depth_remaining >= min_depth && legal_moves.size() >= threshold && trigger;
     if (!applied)
         return legal_moves;
+    if (stats != nullptr) {
+        ++stats->attempted_nodes;
+        stats->input_legal_moves += legal_moves.size();
+    }
     const auto classes =
         generate_equivalent_successor_classes(state, legal_moves, preferred, stats);
+    if (stats != nullptr) {
+        stats->output_representatives += classes.size();
+        stats->estimated_saved_children += legal_moves.size() - classes.size();
+    }
     const double duplicate_ratio =
         legal_moves.empty()
             ? 0.0
             : 1.0 - static_cast<double>(classes.size()) / static_cast<double>(legal_moves.size());
     if (duplicate_ratio < minimum_duplicate_ratio) {
+        if (stats != nullptr)
+            ++stats->rollback_low_duplicate_ratio;
         applied = false;
         return legal_moves;
     }

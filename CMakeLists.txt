@@ -44,6 +44,14 @@ add_executable(qas_stage5_profile benchmarks/stage5_profile.cpp
 target_include_directories(qas_stage5_profile PRIVATE benchmarks)
 target_link_libraries(qas_stage5_profile PRIVATE qas_core)
 
+add_executable(qas_stage55_ceiling benchmarks/stage55_ceiling.cpp
+                                    benchmarks/stage35_fixture.cpp)
+target_include_directories(qas_stage55_ceiling PRIVATE benchmarks)
+target_link_libraries(qas_stage55_ceiling PRIVATE qas_core)
+if(WIN32)
+    target_link_libraries(qas_stage55_ceiling PRIVATE psapi)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(qas_tests tests/quantum_state_test.cpp)

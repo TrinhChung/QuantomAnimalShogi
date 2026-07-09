@@ -397,16 +397,34 @@ bool validate_state(const State& state, std::string* error) {
 
 namespace {
 
-bool propagate_impl(State& state, PropagationMode mode, std::uint64_t* iteration_count) {
+bool propagate_impl(State& state, PropagationMode mode, RuleMetrics* metrics) {
     bool changed = true;
+    std::uint64_t iterations = 0;
+    std::uint64_t masks_changed = 0;
+    auto finish = [&](bool success) {
+        if (metrics != nullptr) {
+            metrics->propagation_iterations += iterations;
+            metrics->propagation_iterations_max =
+                std::max(metrics->propagation_iterations_max, iterations);
+            metrics->propagation_masks_changed += masks_changed;
+            if (success) {
+                if (iterations <= 1)
+                    ++metrics->propagation_fixed_point_one_iteration;
+                else
+                    ++metrics->propagation_fixed_point_multi_iteration;
+            }
+        }
+        return success;
+    };
     while (changed) {
-        if (iteration_count != nullptr)
-            ++*iteration_count;
+        ++iterations;
         const auto before = state.mask;
         for (Mask mask : state.mask) {
             if (mask == 0 || (mask & ~all_form_mask) != 0)
-                return false;
+                return finish(false);
         }
+        if (metrics != nullptr)
+            metrics->propagation_origin_calls += 2;
         const bool south_ok = mode == PropagationMode::PermutationReference
                                   ? propagate_origin_reference(state, Side::South)
                                   : propagate_origin_lut(state, Side::South);
@@ -414,11 +432,17 @@ bool propagate_impl(State& state, PropagationMode mode, std::uint64_t* iteration
                                   ? propagate_origin_reference(state, Side::North)
                                   : propagate_origin_lut(state, Side::North);
         if (!south_ok || !north_ok) {
-            return false;
+            return finish(false);
         }
         changed = state.mask != before;
+        if (changed && metrics != nullptr) {
+            for (int piece = 0; piece < physical_piece_count; ++piece) {
+                if (state.mask[piece] != before[piece])
+                    ++masks_changed;
+            }
+        }
     }
-    return true;
+    return finish(true);
 }
 
 }  // namespace
@@ -606,11 +630,9 @@ bool apply_move_internal(State& state,
     bool propagation_succeeded = false;
     if (metrics != nullptr) {
         const auto propagation_start = std::chrono::steady_clock::now();
-        std::uint64_t propagation_iterations = 0;
-        propagation_succeeded = propagate_impl(state, mode, &propagation_iterations);
+        propagation_succeeded = propagate_impl(state, mode, metrics);
         const auto propagation_end = std::chrono::steady_clock::now();
         ++metrics->propagation_calls;
-        metrics->propagation_iterations += propagation_iterations;
         metrics->propagation_ms +=
             std::chrono::duration<double, std::milli>(propagation_end - propagation_start).count();
     } else {
@@ -619,17 +641,32 @@ bool apply_move_internal(State& state,
     if (!propagation_succeeded)
         return reject();
 
+    std::chrono::steady_clock::time_point terminal_begin;
+    if (metrics != nullptr) {
+        ++metrics->terminal_check_calls;
+        ++metrics->catch_check_calls;
+        terminal_begin = std::chrono::steady_clock::now();
+    }
     if (catch_win) {
         state.terminal = Terminal::Catch;
         state.winner = static_cast<std::int8_t>(side_index(mover));
-    } else if (detect_try && contains(state.mask[piece], Animal::Lion) &&
-               is_back_rank(move.to, mover) &&
-               !can_capture_piece_immediately(state, piece, mode, metrics)) {
-        state.terminal = Terminal::Try;
-        state.winner = static_cast<std::int8_t>(side_index(mover));
-    } else if (state.turn >= 256) {
-        state.terminal = Terminal::Draw;
-        state.winner = -1;
+    } else {
+        if (metrics != nullptr)
+            ++metrics->try_check_calls;
+        if (detect_try && contains(state.mask[piece], Animal::Lion) &&
+            is_back_rank(move.to, mover) &&
+            !can_capture_piece_immediately(state, piece, mode, metrics)) {
+            state.terminal = Terminal::Try;
+            state.winner = static_cast<std::int8_t>(side_index(mover));
+        } else if (state.turn >= 256) {
+            state.terminal = Terminal::Draw;
+            state.winner = -1;
+        }
+    }
+    if (metrics != nullptr) {
+        metrics->terminal_check_ms += std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - terminal_begin)
+                                          .count();
     }
     if (metrics != nullptr) {
         const auto hash_begin = std::chrono::steady_clock::now();
@@ -770,9 +807,11 @@ void generate_legal_moves_profiled(const State& state,
     State copy = state;
     for (const Move& move : candidates) {
         Undo undo;
+        ++metrics.legal_filter_apply_calls;
         if (apply_move_profiled(copy, move, undo, metrics, mode)) {
             legal.push_back(move);
         } else {
+            ++metrics.legal_filter_rejects;
             ++metrics.pseudo_moves_rejected;
         }
         copy = state;

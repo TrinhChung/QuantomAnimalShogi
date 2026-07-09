@@ -214,18 +214,31 @@ void add_rule_metrics(RuleMetrics& target, const RuleMetrics& source) {
     target.pseudo_move_generation_calls += source.pseudo_move_generation_calls;
     target.pseudo_moves_generated += source.pseudo_moves_generated;
     target.legal_filter_calls += source.legal_filter_calls;
+    target.legal_filter_apply_calls += source.legal_filter_apply_calls;
+    target.legal_filter_rejects += source.legal_filter_rejects;
     target.legal_moves_generated += source.legal_moves_generated;
     target.pseudo_moves_rejected += source.pseudo_moves_rejected;
     target.apply_move_internal_calls += source.apply_move_internal_calls;
     target.apply_move_internal_successes += source.apply_move_internal_successes;
     target.apply_move_internal_failures += source.apply_move_internal_failures;
     target.propagation_calls += source.propagation_calls;
+    target.propagation_origin_calls += source.propagation_origin_calls;
     target.propagation_iterations += source.propagation_iterations;
+    target.propagation_iterations_max =
+        std::max(target.propagation_iterations_max, source.propagation_iterations_max);
+    target.propagation_masks_changed += source.propagation_masks_changed;
+    target.propagation_fixed_point_one_iteration += source.propagation_fixed_point_one_iteration;
+    target.propagation_fixed_point_multi_iteration +=
+        source.propagation_fixed_point_multi_iteration;
+    target.terminal_check_calls += source.terminal_check_calls;
+    target.catch_check_calls += source.catch_check_calls;
+    target.try_check_calls += source.try_check_calls;
     target.hash_recompute_calls += source.hash_recompute_calls;
     target.pseudo_move_generation_ms += source.pseudo_move_generation_ms;
     target.legal_filter_ms += source.legal_filter_ms;
     target.apply_move_internal_ms += source.apply_move_internal_ms;
     target.propagation_ms += source.propagation_ms;
+    target.terminal_check_ms += source.terminal_check_ms;
     target.hash_recompute_ms += source.hash_recompute_ms;
 }
 
@@ -552,12 +565,16 @@ int AlphaBetaEngine::move_order_score(const State& state,
         return 2'000'000;
     int score = 0;
     if (options_.killer_enabled && ply < static_cast<int>(killers_.size())) {
+        if (options_.benchmark_instrumentation_enabled)
+            ++stats_.killer_score_calls;
         if (move == killers_[ply][0])
             score += 180'000;
         else if (move == killers_[ply][1])
             score += 160'000;
     }
     if (options_.history_enabled) {
+        if (options_.benchmark_instrumentation_enabled)
+            ++stats_.history_score_calls;
         score += history_[side_index(state.side_to_move)][move.from][move.to];
     }
     const int target = state.board[move.to];
@@ -587,6 +604,8 @@ int AlphaBetaEngine::move_order_score(const State& state,
     Undo undo;
     if (!apply_search_move(after, move, undo))
         return -2'000'000;
+    if (options_.immediate_win_ordering_enabled && options_.benchmark_instrumentation_enabled)
+        ++stats_.immediate_win_ordering_calls;
     if (options_.immediate_win_ordering_enabled &&
         (after.terminal == Terminal::Catch || after.terminal == Terminal::Try)) {
         return 1'500'000 + score;
@@ -595,6 +614,8 @@ int AlphaBetaEngine::move_order_score(const State& state,
     const int after_lions = lion_candidate_count(after, after.side_to_move);
     if (options_.lion_reduction_ordering_enabled)
         score += (before_lions - after_lions) * 70'000;
+    if (options_.prevent_loss_ordering_enabled && options_.benchmark_instrumentation_enabled)
+        ++stats_.prevent_loss_ordering_calls;
     if (options_.prevent_loss_ordering_enabled &&
         side_has_immediate_win(state, opposite(state.side_to_move)) &&
         !side_has_immediate_win(after, after.side_to_move)) {
@@ -661,6 +682,7 @@ void AlphaBetaEngine::generate_search_moves(
         const auto begin = std::chrono::steady_clock::now();
         bool applied = false;
         SuccessorReductionStats reducer_stats;
+        ++stats_.leq_calls;
         const bool low_time =
             options_.reducer_disable_low_time && std::chrono::steady_clock::now() >= soft_deadline_;
         moves = options_.successor_reducer(
@@ -676,17 +698,24 @@ void AlphaBetaEngine::generate_search_moves(
             applied,
             options_.benchmark_instrumentation_enabled ? &reducer_stats : nullptr);
         const auto end = std::chrono::steady_clock::now();
-        if (applied) {
+        if (options_.benchmark_instrumentation_enabled && reducer_stats.attempted_nodes > 0) {
             stats_.leq_grouping_ms +=
                 std::chrono::duration<double, std::milli>(end - begin).count();
-            ++stats_.leq_grouped_nodes;
-            stats_.leq_skipped_moves += raw_move_count - moves.size();
-            stats_.leq_raw_moves += raw_move_count;
-            stats_.leq_group_moves += moves.size();
+            stats_.leq_attempted_nodes += reducer_stats.attempted_nodes;
+            stats_.leq_attempt_input_moves += reducer_stats.input_legal_moves;
+            stats_.leq_attempt_output_representatives += reducer_stats.output_representatives;
+            stats_.leq_rollback_low_duplicate_ratio += reducer_stats.rollback_low_duplicate_ratio;
+            stats_.leq_estimated_saved_children += reducer_stats.estimated_saved_children;
             stats_.canonicalize_calls += reducer_stats.canonicalize_calls;
             stats_.canonicalize_ms += reducer_stats.canonicalize_ms;
             stats_.propagation_calls += reducer_stats.propagation_calls;
             stats_.propagation_ms += reducer_stats.propagation_ms;
+        }
+        if (applied) {
+            ++stats_.leq_grouped_nodes;
+            stats_.leq_skipped_moves += raw_move_count - moves.size();
+            stats_.leq_raw_moves += raw_move_count;
+            stats_.leq_group_moves += moves.size();
         }
     }
     stats_.equivalent_successor_moves += moves.size();
@@ -717,6 +746,7 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
                 const BoundType bound = static_cast<BoundType>(entry->flag);
                 if (bound == BoundType::Exact) {
                     ++stats_.tt_exact_hits;
+                    ++stats_.tt_cutoffs;
                     return tt_score;
                 }
                 if (bound == BoundType::Lower) {
@@ -727,8 +757,10 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
                     ++stats_.tt_upper_hits;
                     beta = std::min(beta, tt_score);
                 }
-                if (alpha >= beta)
+                if (alpha >= beta) {
+                    ++stats_.tt_cutoffs;
                     return tt_score;
+                }
             }
         }
     }
@@ -739,6 +771,7 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         return -mate_score + ply;
     order_moves(state, moves, tt_move, ply);
     if (tt_move.valid() && std::find(moves.begin(), moves.end(), tt_move) != moves.end()) {
+        ++stats_.tt_move_present;
         ++stats_.tt_move_used;
     }
 
@@ -760,7 +793,16 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
                 score = -negamax(state, depth - 1, -beta, -alpha, ply + 1);
             }
         }
-        undo_move(state, undo);
+        if (options_.benchmark_instrumentation_enabled) {
+            const auto undo_begin = std::chrono::steady_clock::now();
+            undo_move(state, undo);
+            ++stats_.undo_move_calls;
+            stats_.undo_move_ms += std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - undo_begin)
+                                       .count();
+        } else {
+            undo_move(state, undo);
+        }
         if (stopped_)
             return 0;
         if (score > best) {
@@ -773,6 +815,8 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         if (alpha >= beta) {
             ++stats_.cutoffs;
             stats_.cutoff_rank_sum += static_cast<std::uint64_t>(move_index + 1);
+            ++stats_.cutoff_rank_histogram[std::min<std::size_t>(
+                static_cast<std::size_t>(move_index), stats_.cutoff_rank_histogram.size() - 1)];
             if (move_index == 0)
                 ++stats_.first_move_cutoffs;
             if (move == tt_move)
@@ -833,6 +877,10 @@ bool AlphaBetaEngine::search_root(
     if (moves.empty())
         return true;
     order_moves(state, moves, tt_move, 0);
+    if (tt_move.valid() && std::find(moves.begin(), moves.end(), tt_move) != moves.end()) {
+        ++stats_.tt_move_present;
+        ++stats_.tt_move_used;
+    }
     int best = -search_infinity;
     Move local_best = moves.front();
     bool first = true;
@@ -852,7 +900,16 @@ bool AlphaBetaEngine::search_root(
                 score = -negamax(state, depth - 1, -beta, -alpha, 1);
             }
         }
-        undo_move(state, undo);
+        if (options_.benchmark_instrumentation_enabled) {
+            const auto undo_begin = std::chrono::steady_clock::now();
+            undo_move(state, undo);
+            ++stats_.undo_move_calls;
+            stats_.undo_move_ms += std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - undo_begin)
+                                       .count();
+        } else {
+            undo_move(state, undo);
+        }
         if (stopped_)
             return false;
         if (score > best) {
@@ -948,6 +1005,10 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
             }
             ++stats_.aspiration_retries;
             ++retries;
+            if (depth_score <= alpha)
+                ++stats_.aspiration_fail_low;
+            else if (depth_score >= beta)
+                ++stats_.aspiration_fail_high;
             if (retries > options.aspiration_max_retries ||
                 std::chrono::steady_clock::now() >= soft_deadline_) {
                 alpha = -search_infinity;

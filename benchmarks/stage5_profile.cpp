@@ -30,10 +30,21 @@ struct MovegenProfile {
     double legal_filter_us{0.0};
     double apply_us{0.0};
     double propagation_us{0.0};
+    double terminal_us{0.0};
     double hash_us{0.0};
     std::uint64_t rejected{0};
+    std::uint64_t legal_filter_apply_calls{0};
+    std::uint64_t legal_filter_rejects{0};
     std::uint64_t apply_calls{0};
+    std::uint64_t terminal_check_calls{0};
+    std::uint64_t catch_check_calls{0};
+    std::uint64_t try_check_calls{0};
     std::uint64_t propagation_iterations{0};
+    std::uint64_t propagation_origin_calls{0};
+    std::uint64_t propagation_iterations_max{0};
+    std::uint64_t propagation_masks_changed{0};
+    std::uint64_t propagation_one_iteration{0};
+    std::uint64_t propagation_multi_iteration{0};
 };
 
 struct PropagationProfile {
@@ -58,6 +69,7 @@ struct SearchProfile {
     double apply_ms{0.0};
     double propagation_ms{0.0};
     double hash_ms{0.0};
+    double terminal_ms{0.0};
     double order_ms{0.0};
     double eval_ms{0.0};
     double leq_ms{0.0};
@@ -65,16 +77,47 @@ struct SearchProfile {
     std::uint64_t generated_legal{0};
     std::uint64_t generated_pseudo{0};
     std::uint64_t rejected_pseudo{0};
+    std::uint64_t legal_filter_apply_calls{0};
+    std::uint64_t legal_filter_rejects{0};
     std::uint64_t apply_calls{0};
+    std::uint64_t apply_successes{0};
+    std::uint64_t apply_failures{0};
+    std::uint64_t terminal_check_calls{0};
+    std::uint64_t catch_check_calls{0};
+    std::uint64_t try_check_calls{0};
     std::uint64_t propagation_calls{0};
     std::uint64_t propagation_iterations{0};
+    std::uint64_t propagation_origin_calls{0};
+    std::uint64_t propagation_iterations_max{0};
+    std::uint64_t propagation_masks_changed{0};
+    std::uint64_t propagation_one_iteration{0};
+    std::uint64_t propagation_multi_iteration{0};
     std::uint64_t move_order_calls{0};
+    std::uint64_t undo_calls{0};
     std::uint64_t leq_grouped_nodes{0};
+    std::uint64_t leq_calls{0};
+    std::uint64_t leq_attempted_nodes{0};
+    std::uint64_t leq_attempt_input_moves{0};
+    std::uint64_t leq_attempt_output_representatives{0};
+    std::uint64_t leq_rollbacks{0};
+    std::uint64_t leq_estimated_saved_children{0};
     std::uint64_t leq_raw_moves{0};
     std::uint64_t leq_group_moves{0};
     std::uint64_t leq_skipped_moves{0};
     std::uint64_t cutoffs{0};
     std::uint64_t first_move_cutoffs{0};
+    std::uint64_t tt_probes{0};
+    std::uint64_t tt_hits{0};
+    std::uint64_t tt_cutoffs{0};
+    std::uint64_t tt_move_present{0};
+    std::uint64_t tt_move_cutoffs{0};
+    std::uint64_t immediate_win_ordering_calls{0};
+    std::uint64_t prevent_loss_ordering_calls{0};
+    std::uint64_t history_score_calls{0};
+    std::uint64_t killer_score_calls{0};
+    double undo_ms{0.0};
+    double average_legal_moves{0.0};
+    std::uint64_t max_legal_moves{0};
 };
 
 struct ValidationProfile {
@@ -90,7 +133,9 @@ const std::vector<std::string>& focused_names() {
                                                 "duplicate_hands",
                                                 "high_uncertainty_midgame",
                                                 "many_hands",
-                                                "low_uncertainty_midgame"};
+                                                "low_uncertainty_midgame",
+                                                "near_try",
+                                                "near_catch"};
     return names;
 }
 
@@ -154,8 +199,18 @@ MovegenProfile profile_movegen(const TestPosition& position, int iterations) {
     result.pseudo_count = scratch.size();
     result.legal_count = legal.size();
     result.rejected = metrics.pseudo_moves_rejected;
+    result.legal_filter_apply_calls = metrics.legal_filter_apply_calls;
+    result.legal_filter_rejects = metrics.legal_filter_rejects;
     result.apply_calls = metrics.apply_move_internal_calls;
+    result.terminal_check_calls = metrics.terminal_check_calls;
+    result.catch_check_calls = metrics.catch_check_calls;
+    result.try_check_calls = metrics.try_check_calls;
     result.propagation_iterations = metrics.propagation_iterations;
+    result.propagation_origin_calls = metrics.propagation_origin_calls;
+    result.propagation_iterations_max = metrics.propagation_iterations_max;
+    result.propagation_masks_changed = metrics.propagation_masks_changed;
+    result.propagation_one_iteration = metrics.propagation_fixed_point_one_iteration;
+    result.propagation_multi_iteration = metrics.propagation_fixed_point_multi_iteration;
     result.pseudo_us =
         metrics.pseudo_move_generation_calls == 0
             ? 0.0
@@ -170,6 +225,9 @@ MovegenProfile profile_movegen(const TestPosition& position, int iterations) {
     result.propagation_us = metrics.propagation_calls == 0
                                 ? 0.0
                                 : metrics.propagation_ms * 1000.0 / metrics.propagation_calls;
+    result.terminal_us = metrics.terminal_check_calls == 0
+                             ? 0.0
+                             : metrics.terminal_check_ms * 1000.0 / metrics.terminal_check_calls;
     result.hash_us = metrics.hash_recompute_calls == 0
                          ? 0.0
                          : metrics.hash_recompute_ms * 1000.0 / metrics.hash_recompute_calls;
@@ -230,6 +288,7 @@ SearchProfile profile_search(const TestPosition& position,
     profile.apply_ms = rules.apply_move_internal_ms;
     profile.propagation_ms = stats.propagation_ms;
     profile.hash_ms = rules.hash_recompute_ms;
+    profile.terminal_ms = rules.terminal_check_ms;
     profile.order_ms = stats.move_order_ms;
     profile.eval_ms = stats.eval_ms;
     profile.leq_ms = stats.leq_grouping_ms;
@@ -237,11 +296,42 @@ SearchProfile profile_search(const TestPosition& position,
     profile.generated_legal = stats.generated_legal_moves;
     profile.generated_pseudo = rules.pseudo_moves_generated;
     profile.rejected_pseudo = rules.pseudo_moves_rejected;
+    profile.legal_filter_apply_calls = rules.legal_filter_apply_calls;
+    profile.legal_filter_rejects = rules.legal_filter_rejects;
     profile.apply_calls = rules.apply_move_internal_calls;
+    profile.apply_successes = rules.apply_move_internal_successes;
+    profile.apply_failures = rules.apply_move_internal_failures;
+    profile.terminal_check_calls = rules.terminal_check_calls;
+    profile.catch_check_calls = rules.catch_check_calls;
+    profile.try_check_calls = rules.try_check_calls;
     profile.propagation_calls = stats.propagation_calls;
     profile.propagation_iterations = rules.propagation_iterations;
+    profile.propagation_origin_calls = rules.propagation_origin_calls;
+    profile.propagation_iterations_max = rules.propagation_iterations_max;
+    profile.propagation_masks_changed = rules.propagation_masks_changed;
+    profile.propagation_one_iteration = rules.propagation_fixed_point_one_iteration;
+    profile.propagation_multi_iteration = rules.propagation_fixed_point_multi_iteration;
     profile.move_order_calls = stats.move_order_calls;
+    profile.undo_calls = stats.undo_move_calls;
+    profile.undo_ms = stats.undo_move_ms;
+    profile.average_legal_moves = stats.average_legal_moves();
+    profile.max_legal_moves = stats.max_legal_moves;
+    profile.tt_probes = stats.tt_probes;
+    profile.tt_hits = stats.tt_hits;
+    profile.tt_cutoffs = stats.tt_cutoffs;
+    profile.tt_move_present = stats.tt_move_present;
+    profile.tt_move_cutoffs = stats.tt_move_cutoffs;
+    profile.immediate_win_ordering_calls = stats.immediate_win_ordering_calls;
+    profile.prevent_loss_ordering_calls = stats.prevent_loss_ordering_calls;
+    profile.history_score_calls = stats.history_score_calls;
+    profile.killer_score_calls = stats.killer_score_calls;
     profile.leq_grouped_nodes = stats.leq_grouped_nodes;
+    profile.leq_calls = stats.leq_calls;
+    profile.leq_attempted_nodes = stats.leq_attempted_nodes;
+    profile.leq_attempt_input_moves = stats.leq_attempt_input_moves;
+    profile.leq_attempt_output_representatives = stats.leq_attempt_output_representatives;
+    profile.leq_rollbacks = stats.leq_rollback_low_duplicate_ratio;
+    profile.leq_estimated_saved_children = stats.leq_estimated_saved_children;
     profile.leq_raw_moves = stats.leq_raw_moves;
     profile.leq_group_moves = stats.leq_group_moves;
     profile.leq_skipped_moves = stats.leq_skipped_moves;
@@ -285,7 +375,18 @@ void print_movegen(const MovegenProfile& profile) {
               << profile.rejected << std::setw(11) << std::fixed << std::setprecision(2)
               << profile.pseudo_us << std::setw(12) << profile.legal_filter_us << std::setw(11)
               << profile.apply_us << std::setw(10) << profile.propagation_us << std::setw(9)
-              << profile.hash_us << '\n';
+              << profile.terminal_us << std::setw(9) << profile.hash_us << '\n';
+    std::cout << "  legal_filter: apply_calls=" << profile.legal_filter_apply_calls
+              << " rejects=" << profile.legal_filter_rejects
+              << " terminal_calls=" << profile.terminal_check_calls
+              << " catch_checks=" << profile.catch_check_calls
+              << " try_checks=" << profile.try_check_calls << '\n';
+    std::cout << "  prop_details: origins=" << profile.propagation_origin_calls
+              << " iterations=" << profile.propagation_iterations
+              << " max_iter=" << profile.propagation_iterations_max
+              << " masks_changed=" << profile.propagation_masks_changed
+              << " fixed1=" << profile.propagation_one_iteration
+              << " fixed>1=" << profile.propagation_multi_iteration << '\n';
 }
 
 void print_propagation(const PropagationProfile& profile) {
@@ -305,7 +406,8 @@ void print_search(const SearchProfile& profile) {
               << " nodes=" << profile.nodes << " time=" << std::fixed << std::setprecision(1)
               << profile.total_ms << "ms\n";
     std::cout << "  expanded=" << profile.expanded_nodes
-              << " legal_moves=" << profile.generated_legal
+              << " legal_moves=" << profile.generated_legal << " avg_legal=" << std::setprecision(2)
+              << profile.average_legal_moves << " max_legal=" << profile.max_legal_moves
               << " pseudo_moves=" << profile.generated_pseudo
               << " rejected=" << profile.rejected_pseudo << " apply_calls=" << profile.apply_calls
               << '\n';
@@ -322,20 +424,61 @@ void print_search(const SearchProfile& profile) {
               << "ms legal_filter=" << profile.legal_filter_ms
               << "ms apply_inclusive=" << profile.apply_ms
               << "ms propagation=" << profile.propagation_ms << "ms hash=" << profile.hash_ms
+              << "ms terminal=" << profile.terminal_ms
               << "ms prop_calls=" << profile.propagation_calls
               << " prop_iterations=" << profile.propagation_iterations << '\n';
-    if (profile.leq_raw_moves > 0) {
+    std::cout << "  legal_filter: apply_calls=" << profile.legal_filter_apply_calls
+              << " rejects=" << profile.legal_filter_rejects
+              << " retained=" << profile.generated_legal << '\n';
+    std::cout << "  terminal: calls=" << profile.terminal_check_calls
+              << " catch_checks=" << profile.catch_check_calls
+              << " try_checks=" << profile.try_check_calls << " ms=" << profile.terminal_ms << '\n';
+    std::cout << "  propagation: origin_calls=" << profile.propagation_origin_calls
+              << " max_iter=" << profile.propagation_iterations_max
+              << " masks_changed=" << profile.propagation_masks_changed
+              << " fixed1=" << profile.propagation_one_iteration
+              << " fixed>1=" << profile.propagation_multi_iteration << '\n';
+    std::cout << "  apply/undo/hash: apply_ok=" << profile.apply_successes
+              << " apply_fail=" << profile.apply_failures << " undo_calls=" << profile.undo_calls
+              << " undo=" << profile.undo_ms << "ms hash=" << profile.hash_ms << "ms\n";
+    if (profile.leq_attempt_input_moves > 0) {
         const double duplicate_ratio =
-            1.0 - static_cast<double>(profile.leq_group_moves) / profile.leq_raw_moves;
-        std::cout << "  L_eq: grouped_nodes=" << profile.leq_grouped_nodes
+            1.0 - static_cast<double>(profile.leq_attempt_output_representatives) /
+                      profile.leq_attempt_input_moves;
+        std::cout << "  L_eq: calls=" << profile.leq_calls
+                  << " attempts=" << profile.leq_attempted_nodes
+                  << " grouped_nodes=" << profile.leq_grouped_nodes
                   << " raw=" << profile.leq_raw_moves << " reps=" << profile.leq_group_moves
                   << " skipped=" << profile.leq_skipped_moves
+                  << " rollbacks=" << profile.leq_rollbacks
+                  << " estimated_saved=" << profile.leq_estimated_saved_children
                   << " duplicate_ratio=" << std::setprecision(1) << duplicate_ratio * 100.0
                   << "%\n";
     }
+    const double first_cutoff_ratio =
+        profile.cutoffs == 0 ? 0.0
+                             : static_cast<double>(profile.first_move_cutoffs) / profile.cutoffs;
+    const double tt_hit_rate =
+        profile.tt_probes == 0 ? 0.0 : static_cast<double>(profile.tt_hits) / profile.tt_probes;
+    const double tt_present_rate =
+        profile.move_order_calls == 0
+            ? 0.0
+            : static_cast<double>(profile.tt_move_present) / profile.move_order_calls;
+    std::cout << "  TT: probes=" << profile.tt_probes << " hits=" << profile.tt_hits
+              << " hit_rate=" << std::setprecision(1) << tt_hit_rate * 100.0
+              << "% cutoffs=" << profile.tt_cutoffs
+              << " tt_move_present=" << profile.tt_move_present
+              << " present_rate=" << tt_present_rate * 100.0
+              << "% tt_move_cutoffs=" << profile.tt_move_cutoffs << '\n';
+    std::cout << "  ordering: calls=" << profile.move_order_calls
+              << " immediate_win_checks=" << profile.immediate_win_ordering_calls
+              << " prevent_loss_checks=" << profile.prevent_loss_ordering_calls
+              << " killer_scores=" << profile.killer_score_calls
+              << " history_scores=" << profile.history_score_calls << '\n';
     std::cout << "  cutoffs=" << profile.cutoffs
               << " first_move_cutoffs=" << profile.first_move_cutoffs
-              << " move_order_calls=" << profile.move_order_calls << '\n';
+              << " first_move_ratio=" << std::setprecision(1) << first_cutoff_ratio * 100.0
+              << "% move_order_calls=" << profile.move_order_calls << " qnodes=0\n";
 }
 
 void print_validation(const ValidationProfile& profile) {
@@ -374,7 +517,8 @@ int main(int argc, char* argv[]) {
         std::cout << std::left << std::setw(26) << "position" << std::right << std::setw(7)
                   << "pseudo" << std::setw(7) << "legal" << std::setw(9) << "rejected"
                   << std::setw(11) << "pgen_us" << std::setw(12) << "filter_us" << std::setw(11)
-                  << "apply_us" << std::setw(10) << "prop_us" << std::setw(9) << "hash_us" << '\n';
+                  << "apply_us" << std::setw(10) << "prop_us" << std::setw(9) << "term_us"
+                  << std::setw(9) << "hash_us" << '\n';
         for (const auto& position : positions)
             print_movegen(profile_movegen(position, 10000));
 

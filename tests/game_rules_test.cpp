@@ -126,10 +126,10 @@ void test_propagation_lut_matches_reference() {
 
     bool all_match = true;
     std::string first_mismatch;
-    for (unsigned a = 1; a < 16; ++a) {
-        for (unsigned b = 1; b < 16; ++b) {
-            for (unsigned c = 1; c < 16; ++c) {
-                for (unsigned d = 1; d < 16; ++d) {
+    for (unsigned a = 0; a < 16; ++a) {
+        for (unsigned b = 0; b < 16; ++b) {
+            for (unsigned c = 0; c < 16; ++c) {
+                for (unsigned d = 0; d < 16; ++d) {
                     qas::State reference = base;
                     reference.mask[0] = forms_from_lineage_options(a);
                     reference.mask[1] = forms_from_lineage_options(b);
@@ -167,6 +167,34 @@ void test_propagation_lut_matches_reference() {
               qas::propagate(optimized, qas::PropagationMode::LineageLut) &&
               reference.mask == optimized.mask,
           "LUT preserves exact Chick/Hen forms within the shared CH lineage");
+}
+
+void test_reachable_reference_lut_equivalence() {
+    qas::State state = qas::initial_state();
+    std::mt19937 random(0x5A6E2026U);
+    for (int ply = 0; ply < 80 && state.terminal == qas::Terminal::None; ++ply) {
+        qas::State reference = state;
+        qas::State optimized = state;
+        const bool reference_ok =
+            qas::propagate(reference, qas::PropagationMode::PermutationReference);
+        const bool optimized_ok = qas::propagate(optimized, qas::PropagationMode::LineageLut);
+        check(reference_ok == optimized_ok && reference.mask == optimized.mask,
+              "reachable propagation matches reference at ply " + std::to_string(ply));
+
+        const auto reference_moves =
+            qas::generate_legal_moves(state, qas::PropagationMode::PermutationReference);
+        const auto optimized_moves =
+            qas::generate_legal_moves(state, qas::PropagationMode::LineageLut);
+        check(reference_moves == optimized_moves,
+              "reachable legal move list matches reference at ply " + std::to_string(ply));
+        if (optimized_moves.empty())
+            break;
+
+        std::uniform_int_distribution<std::size_t> select(0, optimized_moves.size() - 1);
+        qas::Undo undo;
+        check(qas::apply_move(state, optimized_moves[select(random)], undo),
+              "reachable equivalence playout move applies");
+    }
 }
 
 void test_catch() {
@@ -322,6 +350,7 @@ int main() {
     test_apply_undo_and_external_mapping();
     test_global_propagation();
     test_propagation_lut_matches_reference();
+    test_reachable_reference_lut_equivalence();
     test_catch();
     test_capture_collapse_and_demotion();
     test_promotion_try_and_draw();

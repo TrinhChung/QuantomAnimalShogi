@@ -17,6 +17,11 @@ inline constexpr int search_infinity = 1'100'000;
 enum class BoundType : std::uint8_t { Exact, Lower, Upper };
 
 struct SuccessorReductionStats {
+    std::uint64_t attempted_nodes{0};
+    std::uint64_t rollback_low_duplicate_ratio{0};
+    std::uint64_t input_legal_moves{0};
+    std::uint64_t output_representatives{0};
+    std::uint64_t estimated_saved_children{0};
     std::uint64_t canonicalize_calls{0};
     std::uint64_t propagation_calls{0};
     double canonicalize_ms{0.0};
@@ -107,6 +112,7 @@ struct SearchStats {
     std::uint64_t leq_grouped_nodes{0};
     std::uint64_t tt_probes{0};
     std::uint64_t tt_hits{0};
+    std::uint64_t tt_cutoffs{0};
     std::uint64_t tt_exact_hits{0};
     std::uint64_t tt_lower_hits{0};
     std::uint64_t tt_upper_hits{0};
@@ -122,13 +128,28 @@ struct SearchStats {
     std::uint64_t history_cutoffs{0};
     std::uint64_t pvs_researches{0};
     std::uint64_t aspiration_retries{0};
+    std::uint64_t aspiration_fail_high{0};
+    std::uint64_t aspiration_fail_low{0};
+    std::array<std::uint64_t, 16> cutoff_rank_histogram{};
     std::uint64_t leq_skipped_moves{0};
     std::uint64_t leq_raw_moves{0};
     std::uint64_t leq_group_moves{0};
+    std::uint64_t leq_calls{0};
+    std::uint64_t leq_attempted_nodes{0};
+    std::uint64_t leq_attempt_input_moves{0};
+    std::uint64_t leq_attempt_output_representatives{0};
+    std::uint64_t leq_rollback_low_duplicate_ratio{0};
+    std::uint64_t leq_estimated_saved_children{0};
     std::uint64_t canonicalize_calls{0};
     std::uint64_t propagation_calls{0};
     std::uint64_t movegen_calls{0};
     std::uint64_t eval_calls{0};
+    std::uint64_t undo_move_calls{0};
+    std::uint64_t tt_move_present{0};
+    std::uint64_t immediate_win_ordering_calls{0};
+    std::uint64_t prevent_loss_ordering_calls{0};
+    std::uint64_t history_score_calls{0};
+    std::uint64_t killer_score_calls{0};
     int depth_reached{0};
     int started_depth{0};
     int timeout_depth{0};
@@ -138,6 +159,7 @@ struct SearchStats {
     double canonicalize_ms{0.0};
     double propagation_ms{0.0};
     double movegen_ms{0.0};
+    double undo_move_ms{0.0};
     std::uint64_t move_order_calls{0};
     double move_order_ms{0.0};
     double eval_ms{0.0};
