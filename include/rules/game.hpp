@@ -52,9 +52,25 @@ struct Undo {
     State previous{};
 };
 
+enum class PropagationMode : std::uint8_t { LineageLut, PermutationReference };
+
 struct RuleMetrics {
+    std::uint64_t pseudo_move_generation_calls{0};
+    std::uint64_t pseudo_moves_generated{0};
+    std::uint64_t legal_filter_calls{0};
+    std::uint64_t legal_moves_generated{0};
+    std::uint64_t pseudo_moves_rejected{0};
+    std::uint64_t apply_move_internal_calls{0};
+    std::uint64_t apply_move_internal_successes{0};
+    std::uint64_t apply_move_internal_failures{0};
     std::uint64_t propagation_calls{0};
+    std::uint64_t propagation_iterations{0};
+    std::uint64_t hash_recompute_calls{0};
+    double pseudo_move_generation_ms{0.0};
+    double legal_filter_ms{0.0};
+    double apply_move_internal_ms{0.0};
     double propagation_ms{0.0};
+    double hash_recompute_ms{0.0};
 };
 
 struct MoveTables {
@@ -71,19 +87,37 @@ const MoveTables& move_tables();
 State initial_state();
 bool validate_state(const State& state, std::string* error = nullptr);
 bool propagate(State& state);
+bool propagate(State& state, PropagationMode mode);
 void recompute_hash(State& state);
 std::uint64_t zobrist_hash(const State& state);
 
 bool apply_move(State& state, const Move& move, Undo& undo);
+bool apply_move(State& state, const Move& move, Undo& undo, PropagationMode mode);
 bool apply_move_profiled(State& state, const Move& move, Undo& undo, RuleMetrics& metrics);
+bool apply_move_profiled(
+    State& state, const Move& move, Undo& undo, RuleMetrics& metrics, PropagationMode mode);
 void undo_move(State& state, const Undo& undo);
 
 std::vector<Move> generate_pseudo_legal_moves(const State& state);
 std::vector<Move> generate_legal_moves(const State& state);
+std::vector<Move> generate_legal_moves(const State& state, PropagationMode mode);
 void generate_pseudo_legal_moves(const State& state, std::vector<Move>& output);
 void generate_legal_moves(const State& state,
                           std::vector<Move>& output,
                           std::vector<Move>& scratch);
+void generate_legal_moves(const State& state,
+                          std::vector<Move>& output,
+                          std::vector<Move>& scratch,
+                          PropagationMode mode);
+void generate_legal_moves_profiled(const State& state,
+                                   std::vector<Move>& output,
+                                   std::vector<Move>& scratch,
+                                   RuleMetrics& metrics);
+void generate_legal_moves_profiled(const State& state,
+                                   std::vector<Move>& output,
+                                   std::vector<Move>& scratch,
+                                   RuleMetrics& metrics,
+                                   PropagationMode mode);
 bool is_square_attacked(const State& state, int square, Side by_side);
 bool is_immediate_winning_move(const State& state, const Move& move);
 

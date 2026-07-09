@@ -163,6 +163,10 @@ void test_benchmark_instrumentation_and_pv() {
     check(result.stats.movegen_calls > 0 && result.stats.eval_calls > 0,
           "benchmark-only movegen and evaluation counters are populated");
     check(result.stats.propagation_calls > 0, "benchmark-only propagation counters are populated");
+    check(result.stats.rule_metrics.apply_move_internal_calls > 0 &&
+              result.stats.rule_metrics.pseudo_moves_generated > 0,
+          "benchmark-only rules counters are populated");
+    check(result.stats.move_order_calls > 0, "benchmark-only move ordering counters are populated");
     check(result.stats.max_legal_moves >= result.stats.average_legal_moves(),
           "maximum legal count bounds the average");
     check(!result.pv_line.empty() && result.pv_line.front() == result.best_move,

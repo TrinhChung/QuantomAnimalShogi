@@ -210,6 +210,25 @@ int score_from_tt(int score, int ply) {
     return score;
 }
 
+void add_rule_metrics(RuleMetrics& target, const RuleMetrics& source) {
+    target.pseudo_move_generation_calls += source.pseudo_move_generation_calls;
+    target.pseudo_moves_generated += source.pseudo_moves_generated;
+    target.legal_filter_calls += source.legal_filter_calls;
+    target.legal_moves_generated += source.legal_moves_generated;
+    target.pseudo_moves_rejected += source.pseudo_moves_rejected;
+    target.apply_move_internal_calls += source.apply_move_internal_calls;
+    target.apply_move_internal_successes += source.apply_move_internal_successes;
+    target.apply_move_internal_failures += source.apply_move_internal_failures;
+    target.propagation_calls += source.propagation_calls;
+    target.propagation_iterations += source.propagation_iterations;
+    target.hash_recompute_calls += source.hash_recompute_calls;
+    target.pseudo_move_generation_ms += source.pseudo_move_generation_ms;
+    target.legal_filter_ms += source.legal_filter_ms;
+    target.apply_move_internal_ms += source.apply_move_internal_ms;
+    target.propagation_ms += source.propagation_ms;
+    target.hash_recompute_ms += source.hash_recompute_ms;
+}
+
 }  // namespace
 
 AlphaBetaEngine::AlphaBetaEngine(std::size_t table_entries) {
@@ -504,9 +523,10 @@ int AlphaBetaEngine::evaluate_search(const State& state) {
 
 bool AlphaBetaEngine::apply_search_move(State& state, const Move& move, Undo& undo) {
     if (!options_.benchmark_instrumentation_enabled)
-        return apply_move(state, move, undo);
+        return apply_move(state, move, undo, options_.propagation_mode);
     RuleMetrics metrics;
-    const bool applied = apply_move_profiled(state, move, undo, metrics);
+    const bool applied = apply_move_profiled(state, move, undo, metrics, options_.propagation_mode);
+    add_rule_metrics(stats_.rule_metrics, metrics);
     stats_.propagation_calls += metrics.propagation_calls;
     stats_.propagation_ms += metrics.propagation_ms;
     return applied;
@@ -595,6 +615,10 @@ void AlphaBetaEngine::order_moves(const State& state,
                                   std::vector<Move>& moves,
                                   const Move& tt_move,
                                   int ply) {
+    std::chrono::steady_clock::time_point begin;
+    if (options_.benchmark_instrumentation_enabled) {
+        begin = std::chrono::steady_clock::now();
+    }
     auto& scored = score_pool_[std::min<std::size_t>(ply, max_search_ply - 1)];
     scored.clear();
     for (const Move& move : moves) {
@@ -605,6 +629,12 @@ void AlphaBetaEngine::order_moves(const State& state,
     });
     for (std::size_t index = 0; index < moves.size(); ++index)
         moves[index] = scored[index].second;
+    if (options_.benchmark_instrumentation_enabled) {
+        ++stats_.move_order_calls;
+        stats_.move_order_ms +=
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+                .count();
+    }
 }
 
 void AlphaBetaEngine::generate_search_moves(
@@ -612,12 +642,16 @@ void AlphaBetaEngine::generate_search_moves(
     auto& scratch = candidate_pool_[std::min<std::size_t>(ply, max_search_ply - 1)];
     if (options_.benchmark_instrumentation_enabled) {
         const auto begin = std::chrono::steady_clock::now();
-        generate_legal_moves(state, moves, scratch);
+        RuleMetrics metrics;
+        generate_legal_moves_profiled(state, moves, scratch, metrics, options_.propagation_mode);
         const auto end = std::chrono::steady_clock::now();
         ++stats_.movegen_calls;
         stats_.movegen_ms += std::chrono::duration<double, std::milli>(end - begin).count();
+        add_rule_metrics(stats_.rule_metrics, metrics);
+        stats_.propagation_calls += metrics.propagation_calls;
+        stats_.propagation_ms += metrics.propagation_ms;
     } else {
-        generate_legal_moves(state, moves, scratch);
+        generate_legal_moves(state, moves, scratch, options_.propagation_mode);
     }
     const std::size_t raw_move_count = moves.size();
     ++stats_.expanded_nodes;
@@ -870,7 +904,7 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
     hard_deadline_ = start_ + std::chrono::milliseconds(std::max(0, hard_ms));
 
     SearchResult result;
-    const auto fallback = generate_legal_moves(root);
+    const auto fallback = generate_legal_moves(root, options_.propagation_mode);
     if (fallback.empty()) {
         result.score = root.terminal == Terminal::None ? -mate_score : terminal_score(root, 0);
         stats_.elapsed_ms =

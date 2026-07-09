@@ -1,9 +1,11 @@
 /build/
 /build_stage35*/
-/.cache/
+/build_stage5/
+.cache/
 *.exe
 *.obj
 *.o
 *.pdb
 
 local_reports/
+benchmarks/fixtures/

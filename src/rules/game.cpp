@@ -57,6 +57,58 @@ Mask forms_for_lineages(Mask forms, Mask lineages) {
     return result;
 }
 
+struct LineagePropagationEntry {
+    std::array<Mask, lineage_count> supported{};
+    bool valid{false};
+};
+
+std::size_t lineage_key(const std::array<Mask, lineage_count>& lineages) {
+    std::size_t key = 0;
+    for (int index = 0; index < lineage_count; ++index) {
+        key |= static_cast<std::size_t>(lineages[index] & 0x0FU)
+               << static_cast<unsigned>(index * 4);
+    }
+    return key;
+}
+
+LineagePropagationEntry build_lineage_entry(const std::array<Mask, lineage_count>& lineages) {
+    LineagePropagationEntry entry;
+    std::array<int, lineage_count> permutation{0, 1, 2, 3};
+    do {
+        bool valid = true;
+        for (int index = 0; index < lineage_count; ++index) {
+            if ((lineages[index] & lineage_bit(permutation[index])) == 0) {
+                valid = false;
+                break;
+            }
+        }
+        if (valid) {
+            entry.valid = true;
+            for (int index = 0; index < lineage_count; ++index) {
+                entry.supported[index] |= lineage_bit(permutation[index]);
+            }
+        }
+    } while (std::next_permutation(permutation.begin(), permutation.end()));
+    return entry;
+}
+
+std::array<LineagePropagationEntry, 1U << (lineage_count * 4)> build_lineage_table() {
+    std::array<LineagePropagationEntry, 1U << (lineage_count * 4)> table{};
+    for (std::size_t key = 0; key < table.size(); ++key) {
+        std::array<Mask, lineage_count> lineages{};
+        for (int index = 0; index < lineage_count; ++index) {
+            lineages[index] = static_cast<Mask>((key >> static_cast<unsigned>(index * 4)) & 0x0FU);
+        }
+        table[key] = build_lineage_entry(lineages);
+    }
+    return table;
+}
+
+const std::array<LineagePropagationEntry, 1U << (lineage_count * 4)>& lineage_table() {
+    static const auto table = build_lineage_table();
+    return table;
+}
+
 std::uint64_t splitmix64(std::uint64_t& seed) {
     std::uint64_t value = (seed += 0x9e3779b97f4a7c15ULL);
     value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
@@ -169,7 +221,7 @@ bool is_back_rank(int square, Side side) {
     return row_of(square) == (side == Side::South ? 0 : board_height - 1);
 }
 
-bool propagate_origin(State& state, Side origin) {
+bool propagate_origin_reference(State& state, Side origin) {
     std::array<int, 4> ids{};
     int count = 0;
     for (int piece = 0; piece < physical_piece_count; ++piece) {
@@ -206,6 +258,36 @@ bool propagate_origin(State& state, Side origin) {
     for (int index = 0; index < 4; ++index) {
         const int piece = ids[index];
         state.mask[piece] = forms_for_lineages(state.mask[piece], supported[index]);
+        if (state.mask[piece] == 0)
+            return false;
+    }
+    return true;
+}
+
+bool propagate_origin_lut(State& state, Side origin) {
+    std::array<int, lineage_count> ids{};
+    int count = 0;
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (originated_from(state, piece, origin)) {
+            if (count >= lineage_count)
+                return false;
+            ids[count++] = piece;
+        }
+    }
+    if (count != lineage_count)
+        return false;
+
+    std::array<Mask, lineage_count> lineages{};
+    for (int index = 0; index < lineage_count; ++index)
+        lineages[index] = lineage_mask(state.mask[ids[index]]);
+
+    const auto& entry = lineage_table()[lineage_key(lineages)];
+    if (!entry.valid)
+        return false;
+
+    for (int index = 0; index < lineage_count; ++index) {
+        const int piece = ids[index];
+        state.mask[piece] = forms_for_lineages(state.mask[piece], entry.supported[index]);
         if (state.mask[piece] == 0)
             return false;
     }
@@ -313,20 +395,40 @@ bool validate_state(const State& state, std::string* error) {
     return true;
 }
 
-bool propagate(State& state) {
+namespace {
+
+bool propagate_impl(State& state, PropagationMode mode, std::uint64_t* iteration_count) {
     bool changed = true;
     while (changed) {
+        if (iteration_count != nullptr)
+            ++*iteration_count;
         const auto before = state.mask;
         for (Mask mask : state.mask) {
             if (mask == 0 || (mask & ~all_form_mask) != 0)
                 return false;
         }
-        if (!propagate_origin(state, Side::South) || !propagate_origin(state, Side::North)) {
+        const bool south_ok = mode == PropagationMode::PermutationReference
+                                  ? propagate_origin_reference(state, Side::South)
+                                  : propagate_origin_lut(state, Side::South);
+        const bool north_ok = mode == PropagationMode::PermutationReference
+                                  ? propagate_origin_reference(state, Side::North)
+                                  : propagate_origin_lut(state, Side::North);
+        if (!south_ok || !north_ok) {
             return false;
         }
         changed = state.mask != before;
     }
     return true;
+}
+
+}  // namespace
+
+bool propagate(State& state) {
+    return propagate(state, PropagationMode::LineageLut);
+}
+
+bool propagate(State& state, PropagationMode mode) {
+    return propagate_impl(state, mode, nullptr);
 }
 
 std::uint64_t zobrist_hash(const State& state) {
@@ -394,10 +496,17 @@ int lion_candidates_for_origin(const State& state, int target_piece) {
     return count;
 }
 
-bool apply_move_internal(
-    State& state, const Move& move, Undo& undo, bool detect_try, RuleMetrics* metrics);
+bool apply_move_internal(State& state,
+                         const Move& move,
+                         Undo& undo,
+                         PropagationMode mode,
+                         bool detect_try,
+                         RuleMetrics* metrics);
 
-bool can_capture_piece_immediately(const State& state, int target_piece, RuleMetrics* metrics) {
+bool can_capture_piece_immediately(const State& state,
+                                   int target_piece,
+                                   PropagationMode mode,
+                                   RuleMetrics* metrics) {
     if (state.pos[target_piece] >= board_size)
         return false;
     for (const Move& reply : generate_pseudo_legal_moves(state)) {
@@ -405,18 +514,39 @@ bool can_capture_piece_immediately(const State& state, int target_piece, RuleMet
             continue;
         State copy = state;
         Undo undo;
-        if (apply_move_internal(copy, reply, undo, false, metrics))
+        if (apply_move_internal(copy, reply, undo, mode, false, metrics))
             return true;
     }
     return false;
 }
 
-bool apply_move_internal(
-    State& state, const Move& move, Undo& undo, bool detect_try, RuleMetrics* metrics) {
+bool apply_move_internal(State& state,
+                         const Move& move,
+                         Undo& undo,
+                         PropagationMode mode,
+                         bool detect_try,
+                         RuleMetrics* metrics) {
+    std::chrono::steady_clock::time_point apply_begin;
+    if (metrics != nullptr) {
+        ++metrics->apply_move_internal_calls;
+        apply_begin = std::chrono::steady_clock::now();
+    }
+    auto finish = [metrics, &apply_begin](bool success) {
+        if (metrics != nullptr) {
+            if (success)
+                ++metrics->apply_move_internal_successes;
+            else
+                ++metrics->apply_move_internal_failures;
+            metrics->apply_move_internal_ms += std::chrono::duration<double, std::milli>(
+                                                   std::chrono::steady_clock::now() - apply_begin)
+                                                   .count();
+        }
+        return success;
+    };
     undo.previous = state;
-    auto reject = [&state, &undo]() {
+    auto reject = [&state, &undo, &finish]() {
         state = undo.previous;
-        return false;
+        return finish(false);
     };
     if (state.terminal != Terminal::None || !move.valid())
         return reject();
@@ -476,13 +606,15 @@ bool apply_move_internal(
     bool propagation_succeeded = false;
     if (metrics != nullptr) {
         const auto propagation_start = std::chrono::steady_clock::now();
-        propagation_succeeded = propagate(state);
+        std::uint64_t propagation_iterations = 0;
+        propagation_succeeded = propagate_impl(state, mode, &propagation_iterations);
         const auto propagation_end = std::chrono::steady_clock::now();
         ++metrics->propagation_calls;
+        metrics->propagation_iterations += propagation_iterations;
         metrics->propagation_ms +=
             std::chrono::duration<double, std::milli>(propagation_end - propagation_start).count();
     } else {
-        propagation_succeeded = propagate(state);
+        propagation_succeeded = propagate(state, mode);
     }
     if (!propagation_succeeded)
         return reject();
@@ -492,25 +624,43 @@ bool apply_move_internal(
         state.winner = static_cast<std::int8_t>(side_index(mover));
     } else if (detect_try && contains(state.mask[piece], Animal::Lion) &&
                is_back_rank(move.to, mover) &&
-               !can_capture_piece_immediately(state, piece, metrics)) {
+               !can_capture_piece_immediately(state, piece, mode, metrics)) {
         state.terminal = Terminal::Try;
         state.winner = static_cast<std::int8_t>(side_index(mover));
     } else if (state.turn >= 256) {
         state.terminal = Terminal::Draw;
         state.winner = -1;
     }
-    recompute_hash(state);
-    return true;
+    if (metrics != nullptr) {
+        const auto hash_begin = std::chrono::steady_clock::now();
+        recompute_hash(state);
+        const auto hash_end = std::chrono::steady_clock::now();
+        ++metrics->hash_recompute_calls;
+        metrics->hash_recompute_ms +=
+            std::chrono::duration<double, std::milli>(hash_end - hash_begin).count();
+    } else {
+        recompute_hash(state);
+    }
+    return finish(true);
 }
 
 }  // namespace
 
 bool apply_move(State& state, const Move& move, Undo& undo) {
-    return apply_move_internal(state, move, undo, true, nullptr);
+    return apply_move(state, move, undo, PropagationMode::LineageLut);
+}
+
+bool apply_move(State& state, const Move& move, Undo& undo, PropagationMode mode) {
+    return apply_move_internal(state, move, undo, mode, true, nullptr);
 }
 
 bool apply_move_profiled(State& state, const Move& move, Undo& undo, RuleMetrics& metrics) {
-    return apply_move_internal(state, move, undo, true, &metrics);
+    return apply_move_profiled(state, move, undo, metrics, PropagationMode::LineageLut);
+}
+
+bool apply_move_profiled(
+    State& state, const Move& move, Undo& undo, RuleMetrics& metrics, PropagationMode mode) {
+    return apply_move_internal(state, move, undo, mode, true, &metrics);
 }
 
 void undo_move(State& state, const Undo& undo) {
@@ -562,25 +712,76 @@ std::vector<Move> generate_pseudo_legal_moves(const State& state) {
 void generate_legal_moves(const State& state,
                           std::vector<Move>& legal,
                           std::vector<Move>& candidates) {
+    generate_legal_moves(state, legal, candidates, PropagationMode::LineageLut);
+}
+
+void generate_legal_moves(const State& state,
+                          std::vector<Move>& legal,
+                          std::vector<Move>& candidates,
+                          PropagationMode mode) {
     generate_pseudo_legal_moves(state, candidates);
     legal.clear();
     legal.reserve(candidates.size());
     State copy = state;
     for (const Move& move : candidates) {
         Undo undo;
-        if (apply_move(copy, move, undo))
+        if (apply_move(copy, move, undo, mode))
             legal.push_back(move);
         copy = state;
     }
 }
 
 std::vector<Move> generate_legal_moves(const State& state) {
+    return generate_legal_moves(state, PropagationMode::LineageLut);
+}
+
+std::vector<Move> generate_legal_moves(const State& state, PropagationMode mode) {
     std::vector<Move> candidates;
     std::vector<Move> legal;
     candidates.reserve(128);
     legal.reserve(128);
-    generate_legal_moves(state, legal, candidates);
+    generate_legal_moves(state, legal, candidates, mode);
     return legal;
+}
+
+void generate_legal_moves_profiled(const State& state,
+                                   std::vector<Move>& legal,
+                                   std::vector<Move>& candidates,
+                                   RuleMetrics& metrics) {
+    generate_legal_moves_profiled(state, legal, candidates, metrics, PropagationMode::LineageLut);
+}
+
+void generate_legal_moves_profiled(const State& state,
+                                   std::vector<Move>& legal,
+                                   std::vector<Move>& candidates,
+                                   RuleMetrics& metrics,
+                                   PropagationMode mode) {
+    const auto pseudo_begin = std::chrono::steady_clock::now();
+    generate_pseudo_legal_moves(state, candidates);
+    const auto pseudo_end = std::chrono::steady_clock::now();
+    ++metrics.pseudo_move_generation_calls;
+    metrics.pseudo_moves_generated += candidates.size();
+    metrics.pseudo_move_generation_ms +=
+        std::chrono::duration<double, std::milli>(pseudo_end - pseudo_begin).count();
+
+    const auto filter_begin = std::chrono::steady_clock::now();
+    legal.clear();
+    legal.reserve(candidates.size());
+    State copy = state;
+    for (const Move& move : candidates) {
+        Undo undo;
+        if (apply_move_profiled(copy, move, undo, metrics, mode)) {
+            legal.push_back(move);
+        } else {
+            ++metrics.pseudo_moves_rejected;
+        }
+        copy = state;
+    }
+    const auto filter_end = std::chrono::steady_clock::now();
+    ++metrics.legal_filter_calls;
+    metrics.legal_moves_generated += legal.size();
+    metrics.legal_filter_ms +=
+        std::chrono::duration<double, std::milli>(filter_end - filter_begin).count();
 }
 
 bool is_immediate_winning_move(const State& state, const Move& move) {

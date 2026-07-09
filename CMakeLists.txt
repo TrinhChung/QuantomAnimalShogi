@@ -39,6 +39,11 @@ if(WIN32)
     target_link_libraries(qas_stage35_benchmark PRIVATE psapi)
 endif()
 
+add_executable(qas_stage5_profile benchmarks/stage5_profile.cpp
+                                   benchmarks/stage35_fixture.cpp)
+target_include_directories(qas_stage5_profile PRIVATE benchmarks)
+target_link_libraries(qas_stage5_profile PRIVATE qas_core)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(qas_tests tests/quantum_state_test.cpp)

@@ -49,6 +49,7 @@ struct SearchOptions {
     bool history_enabled{true};
     bool benchmark_instrumentation_enabled{false};
     bool optimized_eval_enabled{true};
+    PropagationMode propagation_mode{PropagationMode::LineageLut};
     std::uint64_t history_decay_interval{65'536};
     using SuccessorReducer = std::vector<Move> (*)(const State&,
                                                    const std::vector<Move>&,
@@ -137,7 +138,10 @@ struct SearchStats {
     double canonicalize_ms{0.0};
     double propagation_ms{0.0};
     double movegen_ms{0.0};
+    std::uint64_t move_order_calls{0};
+    double move_order_ms{0.0};
     double eval_ms{0.0};
+    RuleMetrics rule_metrics{};
     EvalComponentProfile eval_components{};
     std::vector<DepthReport> completed_depths;
 

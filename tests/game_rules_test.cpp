@@ -1,12 +1,12 @@
-#include "rules/game.hpp"
-#include "io/protocol.hpp"
-
 #include <cstdlib>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <random>
+
+#include "io/protocol.hpp"
+#include "rules/game.hpp"
 
 namespace {
 
@@ -20,9 +20,11 @@ void check(bool condition, const std::string& message) {
 }
 
 void place(qas::State& state, int piece, int square) {
-    if (state.pos[piece] < qas::board_size) state.board[state.pos[piece]] = -1;
+    if (state.pos[piece] < qas::board_size)
+        state.board[state.pos[piece]] = -1;
     state.pos[piece] = static_cast<std::uint8_t>(square);
-    if (square < qas::board_size) state.board[square] = static_cast<std::int8_t>(piece);
+    if (square < qas::board_size)
+        state.board[square] = static_cast<std::int8_t>(piece);
 }
 
 void move_all_to_hands(qas::State& state) {
@@ -34,11 +36,14 @@ void move_all_to_hands(qas::State& state) {
 
 qas::State exact_state() {
     qas::State state = qas::initial_state();
-    state.mask = {
-        qas::bit(qas::Animal::Giraffe), qas::bit(qas::Animal::Chick),
-        qas::bit(qas::Animal::Elephant), qas::bit(qas::Animal::Lion),
-        qas::bit(qas::Animal::Lion), qas::bit(qas::Animal::Chick),
-        qas::bit(qas::Animal::Giraffe), qas::bit(qas::Animal::Elephant)};
+    state.mask = {qas::bit(qas::Animal::Giraffe),
+                  qas::bit(qas::Animal::Chick),
+                  qas::bit(qas::Animal::Elephant),
+                  qas::bit(qas::Animal::Lion),
+                  qas::bit(qas::Animal::Lion),
+                  qas::bit(qas::Animal::Chick),
+                  qas::bit(qas::Animal::Giraffe),
+                  qas::bit(qas::Animal::Elephant)};
     qas::recompute_hash(state);
     return state;
 }
@@ -54,12 +59,9 @@ void test_initial_and_tables() {
 
     const auto& tables = qas::move_tables();
     const auto south_forward = tables.move_possible_mask[0][7][4];
-    check(qas::contains(south_forward, qas::Animal::Chick),
-          "south forward table contains chick");
-    check(qas::contains(south_forward, qas::Animal::Giraffe),
-          "orthogonal table contains giraffe");
-    check(qas::contains(south_forward, qas::Animal::Lion),
-          "adjacent table contains lion");
+    check(qas::contains(south_forward, qas::Animal::Chick), "south forward table contains chick");
+    check(qas::contains(south_forward, qas::Animal::Giraffe), "orthogonal table contains giraffe");
+    check(qas::contains(south_forward, qas::Animal::Lion), "adjacent table contains lion");
 }
 
 void test_apply_undo_and_external_mapping() {
@@ -97,10 +99,74 @@ void test_global_propagation() {
     hen.mask[0] = qas::bit(qas::Animal::Hen);
     check(qas::propagate(hen), "Hen is accepted as Chick lineage");
     for (int piece = 1; piece < 4; ++piece) {
-        check((hen.mask[piece] & (qas::bit(qas::Animal::Chick) |
-                                  qas::bit(qas::Animal::Hen))) == 0,
+        check((hen.mask[piece] & (qas::bit(qas::Animal::Chick) | qas::bit(qas::Animal::Hen))) == 0,
               "Hen consumes the single CH lineage quota");
     }
+}
+
+qas::Mask forms_from_lineage_options(unsigned options) {
+    qas::Mask forms = 0;
+    if ((options & 1U) != 0)
+        forms |= qas::bit(qas::Animal::Chick) | qas::bit(qas::Animal::Hen);
+    if ((options & 2U) != 0)
+        forms |= qas::bit(qas::Animal::Giraffe);
+    if ((options & 4U) != 0)
+        forms |= qas::bit(qas::Animal::Elephant);
+    if ((options & 8U) != 0)
+        forms |= qas::bit(qas::Animal::Lion);
+    return forms;
+}
+
+void test_propagation_lut_matches_reference() {
+    qas::State base = qas::initial_state();
+    base.mask[4] = qas::bit(qas::Animal::Lion);
+    base.mask[5] = qas::bit(qas::Animal::Chick);
+    base.mask[6] = qas::bit(qas::Animal::Giraffe);
+    base.mask[7] = qas::bit(qas::Animal::Elephant);
+
+    bool all_match = true;
+    std::string first_mismatch;
+    for (unsigned a = 1; a < 16; ++a) {
+        for (unsigned b = 1; b < 16; ++b) {
+            for (unsigned c = 1; c < 16; ++c) {
+                for (unsigned d = 1; d < 16; ++d) {
+                    qas::State reference = base;
+                    reference.mask[0] = forms_from_lineage_options(a);
+                    reference.mask[1] = forms_from_lineage_options(b);
+                    reference.mask[2] = forms_from_lineage_options(c);
+                    reference.mask[3] = forms_from_lineage_options(d);
+                    qas::State optimized = reference;
+                    const bool reference_ok =
+                        qas::propagate(reference, qas::PropagationMode::PermutationReference);
+                    const bool optimized_ok =
+                        qas::propagate(optimized, qas::PropagationMode::LineageLut);
+                    if (reference_ok != optimized_ok ||
+                        (reference_ok && reference.mask != optimized.mask)) {
+                        all_match = false;
+                        first_mismatch = std::to_string(a) + "," + std::to_string(b) + "," +
+                                         std::to_string(c) + "," + std::to_string(d);
+                        a = b = c = d = 16;
+                    }
+                }
+            }
+        }
+    }
+    check(all_match,
+          "LUT propagation matches 24-permutation reference for all lineage options: " +
+              first_mismatch);
+
+    qas::State chick_hen = base;
+    chick_hen.mask[0] = qas::bit(qas::Animal::Hen);
+    chick_hen.mask[1] = qas::bit(qas::Animal::Chick) | qas::bit(qas::Animal::Giraffe);
+    chick_hen.mask[2] = qas::bit(qas::Animal::Elephant) | qas::bit(qas::Animal::Lion);
+    chick_hen.mask[3] = qas::bit(qas::Animal::Giraffe) | qas::bit(qas::Animal::Elephant) |
+                        qas::bit(qas::Animal::Lion);
+    qas::State reference = chick_hen;
+    qas::State optimized = chick_hen;
+    check(qas::propagate(reference, qas::PropagationMode::PermutationReference) &&
+              qas::propagate(optimized, qas::PropagationMode::LineageLut) &&
+              reference.mask == optimized.mask,
+          "LUT preserves exact Chick/Hen forms within the shared CH lineage");
 }
 
 void test_catch() {
@@ -129,8 +195,7 @@ void test_capture_collapse_and_demotion() {
     state.mask[5] = qas::bit(qas::Animal::Chick) | qas::bit(qas::Animal::Lion);
     qas::recompute_hash(state);
     qas::Undo undo;
-    check(qas::apply_move(state, qas::Move{0, 4, 1}, undo),
-          "capture of unresolved target applies");
+    check(qas::apply_move(state, qas::Move{0, 4, 1}, undo), "capture of unresolved target applies");
     check(state.mask[4] == qas::bit(qas::Animal::Chick),
           "capture removes Lion possibility from unresolved target");
     check(state.mask[5] == qas::bit(qas::Animal::Lion),
@@ -145,10 +210,8 @@ void test_capture_collapse_and_demotion() {
     place(demote, 0, 4);
     place(demote, 4, 1);
     qas::recompute_hash(demote);
-    check(qas::apply_move(demote, qas::Move{0, 4, 1}, undo),
-          "capturing Hen applies");
-    check(demote.mask[4] == qas::bit(qas::Animal::Chick),
-          "captured Hen demotes to Chick");
+    check(qas::apply_move(demote, qas::Move{0, 4, 1}, undo), "capturing Hen applies");
+    check(demote.mask[4] == qas::bit(qas::Animal::Chick), "captured Hen demotes to Chick");
 }
 
 void test_promotion_try_and_draw() {
@@ -204,11 +267,13 @@ void test_turn_is_hashed_and_parse_roundtrip() {
 }
 
 std::uint64_t perft(qas::State& state, int depth) {
-    if (depth == 0 || state.terminal != qas::Terminal::None) return 1;
+    if (depth == 0 || state.terminal != qas::Terminal::None)
+        return 1;
     std::uint64_t nodes = 0;
     for (const qas::Move& move : qas::generate_legal_moves(state)) {
         qas::Undo undo;
-        if (!qas::apply_move(state, move, undo)) continue;
+        if (!qas::apply_move(state, move, undo))
+            continue;
         nodes += perft(state, depth - 1);
         qas::undo_move(state, undo);
     }
@@ -222,7 +287,8 @@ void test_seeded_playout_full_unwind() {
     std::mt19937 random(0x514153U);
     for (int ply = 0; ply < 64 && state.terminal == qas::Terminal::None; ++ply) {
         const auto moves = qas::generate_legal_moves(state);
-        if (moves.empty()) break;
+        if (moves.empty())
+            break;
         std::uniform_int_distribution<std::size_t> select(0, moves.size() - 1);
         qas::Undo undo;
         check(qas::apply_move(state, moves[select(random)], undo),
@@ -255,6 +321,7 @@ int main() {
     test_initial_and_tables();
     test_apply_undo_and_external_mapping();
     test_global_propagation();
+    test_propagation_lut_matches_reference();
     test_catch();
     test_capture_collapse_and_demotion();
     test_promotion_try_and_draw();
