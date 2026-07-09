@@ -244,6 +244,30 @@ void add_rule_metrics(RuleMetrics& target, const RuleMetrics& source) {
 
 }  // namespace
 
+const char* move_class_name(MoveClass move_class) {
+    switch (move_class) {
+        case MoveClass::TtMove:
+            return "tt_move";
+        case MoveClass::Drop:
+            return "drop";
+        case MoveClass::LionCapture:
+            return "lion_capture";
+        case MoveClass::Capture:
+            return "capture";
+        case MoveClass::Promotion:
+            return "promotion";
+        case MoveClass::TryCandidate:
+            return "try_candidate";
+        case MoveClass::MaskCollapse:
+            return "mask_collapse";
+        case MoveClass::Quiet:
+            return "quiet";
+        case MoveClass::Count:
+            break;
+    }
+    return "unknown";
+}
+
 AlphaBetaEngine::AlphaBetaEngine(std::size_t table_entries) {
     if (table_entries == 0 || (table_entries & (table_entries - 1)) != 0) {
         throw std::invalid_argument("transposition table size must be a power of two");
@@ -255,6 +279,7 @@ AlphaBetaEngine::AlphaBetaEngine(std::size_t table_entries) {
         candidate_pool_[ply].reserve(128);
         score_pool_[ply].reserve(128);
     }
+    root_move_reports_.reserve(128);
 }
 
 void AlphaBetaEngine::clear_tt() {
@@ -557,6 +582,133 @@ void AlphaBetaEngine::update_pv(int ply, const Move& move) {
     }
 }
 
+MoveClass AlphaBetaEngine::classify_move(const State& state,
+                                         const Move& move,
+                                         const Move& tt_move) const {
+    if (options_.tt_move_ordering_enabled && move == tt_move)
+        return MoveClass::TtMove;
+    if (is_hand_position(move.from))
+        return MoveClass::Drop;
+    const int target = state.board[move.to];
+    if (target >= 0) {
+        if (contains(state.mask[target], Animal::Lion))
+            return MoveClass::LionCapture;
+        return MoveClass::Capture;
+    }
+    const int target_row = move.to / board_width;
+    const int back_rank = state.side_to_move == Side::South ? 0 : board_height - 1;
+    if (target_row == back_rank && contains(state.mask[move.piece], Animal::Lion))
+        return MoveClass::TryCandidate;
+    if (target_row == back_rank && contains(state.mask[move.piece], Animal::Chick))
+        return MoveClass::Promotion;
+
+    const Mask move_mask =
+        move.from < board_size
+            ? move_tables().move_possible_mask[side_index(state.side_to_move)][move.from][move.to]
+            : state.mask[move.piece];
+    if (popcount(state.mask[move.piece]) >
+        popcount(static_cast<Mask>(state.mask[move.piece] & move_mask))) {
+        return MoveClass::MaskCollapse;
+    }
+    return MoveClass::Quiet;
+}
+
+void AlphaBetaEngine::record_generated_move_classes(const State& state,
+                                                    const std::vector<Move>& moves,
+                                                    const Move& tt_move,
+                                                    int ply) {
+    if (!options_.benchmark_instrumentation_enabled || ply < 0 ||
+        ply >= static_cast<int>(search_profile_ply_count)) {
+        return;
+    }
+    auto& ply_stats = stats_.move_class_by_ply[static_cast<std::size_t>(ply)];
+    for (const Move& move : moves) {
+        ++ply_stats[static_cast<std::size_t>(classify_move(state, move, tt_move))].generated;
+    }
+}
+
+void AlphaBetaEngine::record_searched_move_class(int ply,
+                                                 MoveClass move_class,
+                                                 std::uint64_t child_nodes,
+                                                 double elapsed_ms) {
+    if (!options_.benchmark_instrumentation_enabled || ply < 0 ||
+        ply >= static_cast<int>(search_profile_ply_count)) {
+        return;
+    }
+    auto& item =
+        stats_
+            .move_class_by_ply[static_cast<std::size_t>(ply)][static_cast<std::size_t>(move_class)];
+    ++item.searched;
+    item.child_nodes += child_nodes;
+    item.elapsed_ms += elapsed_ms;
+}
+
+void AlphaBetaEngine::record_cutoff_move_class(int ply, MoveClass move_class, int cutoff_rank) {
+    if (!options_.benchmark_instrumentation_enabled || ply < 0 ||
+        ply >= static_cast<int>(search_profile_ply_count)) {
+        return;
+    }
+    auto& item =
+        stats_
+            .move_class_by_ply[static_cast<std::size_t>(ply)][static_cast<std::size_t>(move_class)];
+    ++item.cutoffs;
+    item.cutoff_rank_sum += static_cast<std::uint64_t>(cutoff_rank);
+    if (cutoff_rank == 1)
+        ++item.first_cutoffs;
+}
+
+void AlphaBetaEngine::record_root_order(const State& state,
+                                        const std::vector<std::pair<int, Move>>& scored,
+                                        const Move& tt_move) {
+    if (!options_.benchmark_instrumentation_enabled)
+        return;
+    root_move_reports_.clear();
+    root_move_reports_.reserve(scored.size());
+    for (std::size_t index = 0; index < scored.size(); ++index) {
+        RootMoveReport report;
+        report.move = scored[index].second;
+        report.move_class = classify_move(state, report.move, tt_move);
+        report.initial_order = static_cast<int>(index + 1);
+        report.static_order_score = scored[index].first;
+        root_move_reports_.push_back(report);
+    }
+}
+
+void AlphaBetaEngine::record_root_search_result(std::size_t ordered_index,
+                                                int score,
+                                                std::uint64_t child_nodes,
+                                                double elapsed_ms) {
+    if (!options_.benchmark_instrumentation_enabled || ordered_index >= root_move_reports_.size())
+        return;
+    RootMoveReport& report = root_move_reports_[ordered_index];
+    report.searched = true;
+    report.searched_score = score;
+    report.child_nodes += child_nodes;
+    report.elapsed_ms += elapsed_ms;
+}
+
+void AlphaBetaEngine::finalize_root_move_reports() {
+    if (!options_.benchmark_instrumentation_enabled)
+        return;
+    std::vector<std::size_t> indexes;
+    indexes.reserve(root_move_reports_.size());
+    for (std::size_t index = 0; index < root_move_reports_.size(); ++index) {
+        if (root_move_reports_[index].searched)
+            indexes.push_back(index);
+        root_move_reports_[index].final_rank = 0;
+    }
+    std::stable_sort(indexes.begin(), indexes.end(), [&](std::size_t left, std::size_t right) {
+        const RootMoveReport& left_report = root_move_reports_[left];
+        const RootMoveReport& right_report = root_move_reports_[right];
+        if (left_report.searched_score != right_report.searched_score)
+            return left_report.searched_score > right_report.searched_score;
+        return left_report.initial_order < right_report.initial_order;
+    });
+    for (std::size_t index = 0; index < indexes.size(); ++index) {
+        root_move_reports_[indexes[index]].final_rank = static_cast<int>(index + 1);
+    }
+}
+
 int AlphaBetaEngine::move_order_score(const State& state,
                                       const Move& move,
                                       const Move& tt_move,
@@ -577,9 +729,13 @@ int AlphaBetaEngine::move_order_score(const State& state,
             ++stats_.history_score_calls;
         score += history_[side_index(state.side_to_move)][move.from][move.to];
     }
+    if (is_hand_position(move.from))
+        score += options_.hand_drop_ordering_bonus;
     const int target = state.board[move.to];
     if (target >= 0 && options_.capture_ordering_enabled) {
-        score += 250'000 + expected_piece_value(state.mask[target]) * 20;
+        score +=
+            options_.capture_base_ordering_bonus +
+            expected_piece_value(state.mask[target]) * options_.capture_value_ordering_multiplier;
         if (state.mask[target] == bit(Animal::Lion))
             score += 1'000'000;
     }
@@ -591,11 +747,11 @@ int AlphaBetaEngine::move_order_score(const State& state,
     if (options_.mask_collapse_ordering_enabled) {
         score += (popcount(state.mask[move.piece]) -
                   popcount(static_cast<Mask>(state.mask[move.piece] & move_mask))) *
-                 12'000;
+                 options_.mask_collapse_ordering_bonus;
     }
     if (options_.try_threat_ordering_enabled && contains(state.mask[move.piece], Animal::Lion) &&
         move.to / board_width == (state.side_to_move == Side::South ? 0 : board_height - 1)) {
-        score += 30'000;
+        score += options_.try_threat_ordering_bonus;
     }
     if (!options_.strong_ordering_enabled || ply > 0)
         return score;
@@ -613,13 +769,13 @@ int AlphaBetaEngine::move_order_score(const State& state,
     const int before_lions = lion_candidate_count(state, after.side_to_move);
     const int after_lions = lion_candidate_count(after, after.side_to_move);
     if (options_.lion_reduction_ordering_enabled)
-        score += (before_lions - after_lions) * 70'000;
+        score += (before_lions - after_lions) * options_.lion_reduction_ordering_bonus;
     if (options_.prevent_loss_ordering_enabled && options_.benchmark_instrumentation_enabled)
         ++stats_.prevent_loss_ordering_calls;
     if (options_.prevent_loss_ordering_enabled &&
         side_has_immediate_win(state, opposite(state.side_to_move)) &&
         !side_has_immediate_win(after, after.side_to_move)) {
-        score += 400'000;
+        score += options_.prevent_loss_ordering_bonus;
     }
     if (after.pos[move.piece] < board_size && contains(after.mask[move.piece], Animal::Lion)) {
         score += progress_to_try(after.pos[move.piece], state.side_to_move) * 4000;
@@ -648,6 +804,8 @@ void AlphaBetaEngine::order_moves(const State& state,
     std::stable_sort(scored.begin(), scored.end(), [](const auto& left, const auto& right) {
         return left.first > right.first;
     });
+    if (ply == 0)
+        record_root_order(state, scored, tt_move);
     for (std::size_t index = 0; index < moves.size(); ++index)
         moves[index] = scored[index].second;
     if (options_.benchmark_instrumentation_enabled) {
@@ -678,6 +836,7 @@ void AlphaBetaEngine::generate_search_moves(
     ++stats_.expanded_nodes;
     stats_.generated_legal_moves += moves.size();
     stats_.max_legal_moves = std::max<std::uint64_t>(stats_.max_legal_moves, moves.size());
+    record_generated_move_classes(state, moves, tt_move, ply);
     if (options_.successor_reducer != nullptr) {
         const auto begin = std::chrono::steady_clock::now();
         bool applied = false;
@@ -780,6 +939,11 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
     bool first = true;
     int move_index = 0;
     for (const Move& move : moves) {
+        const MoveClass move_class = classify_move(state, move, tt_move);
+        const std::uint64_t child_nodes_before = stats_.searched_nodes;
+        std::chrono::steady_clock::time_point child_begin;
+        if (options_.benchmark_instrumentation_enabled)
+            child_begin = std::chrono::steady_clock::now();
         Undo undo;
         if (!apply_search_move(state, move, undo))
             continue;
@@ -803,6 +967,14 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         } else {
             undo_move(state, undo);
         }
+        if (options_.benchmark_instrumentation_enabled) {
+            record_searched_move_class(ply,
+                                       move_class,
+                                       stats_.searched_nodes - child_nodes_before,
+                                       std::chrono::duration<double, std::milli>(
+                                           std::chrono::steady_clock::now() - child_begin)
+                                           .count());
+        }
         if (stopped_)
             return 0;
         if (score > best) {
@@ -817,6 +989,7 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
             stats_.cutoff_rank_sum += static_cast<std::uint64_t>(move_index + 1);
             ++stats_.cutoff_rank_histogram[std::min<std::size_t>(
                 static_cast<std::size_t>(move_index), stats_.cutoff_rank_histogram.size() - 1)];
+            record_cutoff_move_class(ply, move_class, move_index + 1);
             if (move_index == 0)
                 ++stats_.first_move_cutoffs;
             if (move == tt_move)
@@ -884,9 +1057,15 @@ bool AlphaBetaEngine::search_root(
     int best = -search_infinity;
     Move local_best = moves.front();
     bool first = true;
-    for (const Move& move : moves) {
+    for (std::size_t ordered_index = 0; ordered_index < moves.size(); ++ordered_index) {
+        const Move& move = moves[ordered_index];
         if (should_stop())
             return false;
+        const MoveClass move_class = classify_move(state, move, tt_move);
+        const std::uint64_t child_nodes_before = stats_.searched_nodes;
+        std::chrono::steady_clock::time_point child_begin;
+        if (options_.benchmark_instrumentation_enabled)
+            child_begin = std::chrono::steady_clock::now();
         Undo undo;
         if (!apply_search_move(state, move, undo))
             continue;
@@ -910,6 +1089,14 @@ bool AlphaBetaEngine::search_root(
         } else {
             undo_move(state, undo);
         }
+        if (options_.benchmark_instrumentation_enabled) {
+            const double child_elapsed_ms = std::chrono::duration<double, std::milli>(
+                                                std::chrono::steady_clock::now() - child_begin)
+                                                .count();
+            const std::uint64_t child_nodes = stats_.searched_nodes - child_nodes_before;
+            record_searched_move_class(0, move_class, child_nodes, child_elapsed_ms);
+            record_root_search_result(ordered_index, score, child_nodes, child_elapsed_ms);
+        }
         if (stopped_)
             return false;
         if (score > best) {
@@ -923,6 +1110,7 @@ bool AlphaBetaEngine::search_root(
         if (alpha >= beta)
             break;
     }
+    finalize_root_move_reports();
     best_move = local_best;
     best_score = best;
     const BoundType bound = best <= alpha_original  ? BoundType::Upper
@@ -936,6 +1124,7 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
     options_ = options;
     stats_ = {};
     stopped_ = false;
+    root_move_reports_.clear();
     if (options_.tt_clear_each_move)
         clear_tt();
     if (options_.tt_age_enabled)
@@ -1038,7 +1227,8 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
                         depth_move,
                         stats_.searched_nodes - nodes_before,
                         std::chrono::duration<double, std::milli>(depth_end - depth_start).count(),
-                        result.pv_line});
+                        result.pv_line,
+                        root_move_reports_});
         if (std::abs(depth_score) >= mate_score - 256)
             break;
         if (!options.iterative_deepening_enabled)

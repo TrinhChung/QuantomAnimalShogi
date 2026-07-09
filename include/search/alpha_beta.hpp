@@ -13,8 +13,24 @@ namespace qas {
 
 inline constexpr int mate_score = 1'000'000;
 inline constexpr int search_infinity = 1'100'000;
+inline constexpr std::size_t search_profile_ply_count = 64;
 
 enum class BoundType : std::uint8_t { Exact, Lower, Upper };
+enum class MoveClass : std::uint8_t {
+    TtMove,
+    Drop,
+    LionCapture,
+    Capture,
+    Promotion,
+    TryCandidate,
+    MaskCollapse,
+    Quiet,
+    Count
+};
+
+inline constexpr std::size_t move_class_count = static_cast<std::size_t>(MoveClass::Count);
+
+const char* move_class_name(MoveClass move_class);
 
 struct SuccessorReductionStats {
     std::uint64_t attempted_nodes{0};
@@ -26,6 +42,18 @@ struct SuccessorReductionStats {
     std::uint64_t propagation_calls{0};
     double canonicalize_ms{0.0};
     double propagation_ms{0.0};
+};
+
+struct RootMoveReport {
+    Move move{};
+    MoveClass move_class{MoveClass::Quiet};
+    int initial_order{0};
+    int static_order_score{0};
+    bool searched{false};
+    int searched_score{0};
+    int final_rank{0};
+    std::uint64_t child_nodes{0};
+    double elapsed_ms{0.0};
 };
 
 struct SearchOptions {
@@ -56,6 +84,13 @@ struct SearchOptions {
     bool optimized_eval_enabled{true};
     PropagationMode propagation_mode{PropagationMode::LineageLut};
     std::uint64_t history_decay_interval{65'536};
+    int hand_drop_ordering_bonus{0};
+    int capture_base_ordering_bonus{250'000};
+    int capture_value_ordering_multiplier{20};
+    int mask_collapse_ordering_bonus{12'000};
+    int try_threat_ordering_bonus{30'000};
+    int prevent_loss_ordering_bonus{400'000};
+    int lion_reduction_ordering_bonus{70'000};
     using SuccessorReducer = std::vector<Move> (*)(const State&,
                                                    const std::vector<Move>&,
                                                    const Move&,
@@ -84,6 +119,7 @@ struct DepthReport {
     std::uint64_t nodes{0};
     double elapsed_ms{0.0};
     std::vector<Move> pv_line{};
+    std::vector<RootMoveReport> root_moves{};
 };
 
 struct TimedCounter {
@@ -100,6 +136,20 @@ struct EvalComponentProfile {
     TimedCounter immediate_movegen{};
     TimedCounter immediate_filter{};
     TimedCounter immediate_transition{};
+};
+
+struct MoveClassStats {
+    std::uint64_t generated{0};
+    std::uint64_t searched{0};
+    std::uint64_t cutoffs{0};
+    std::uint64_t first_cutoffs{0};
+    std::uint64_t cutoff_rank_sum{0};
+    std::uint64_t child_nodes{0};
+    double elapsed_ms{0.0};
+
+    double average_cutoff_rank() const {
+        return cutoffs == 0 ? 0.0 : static_cast<double>(cutoff_rank_sum) / cutoffs;
+    }
 };
 
 struct SearchStats {
@@ -165,6 +215,8 @@ struct SearchStats {
     double eval_ms{0.0};
     RuleMetrics rule_metrics{};
     EvalComponentProfile eval_components{};
+    std::array<std::array<MoveClassStats, move_class_count>, search_profile_ply_count>
+        move_class_by_ply{};
     std::vector<DepthReport> completed_depths;
 
     double average_legal_moves() const {
@@ -246,6 +298,7 @@ class AlphaBetaEngine {
     std::array<std::vector<Move>, max_search_ply> candidate_pool_{};
     std::array<std::vector<std::pair<int, Move>>, max_search_ply> score_pool_{};
     std::array<std::vector<Move>, max_search_ply> pv_pool_{};
+    std::vector<RootMoveReport> root_move_reports_{};
     EvalScratch eval_scratch_{};
 
     int negamax(State& state, int depth, int alpha, int beta, int ply);
@@ -257,6 +310,24 @@ class AlphaBetaEngine {
     void order_moves(const State& state, std::vector<Move>& moves, const Move& tt_move, int ply);
     void generate_search_moves(
         const State& state, const Move& tt_move, int depth, int ply, std::vector<Move>& moves);
+    MoveClass classify_move(const State& state, const Move& move, const Move& tt_move) const;
+    void record_generated_move_classes(const State& state,
+                                       const std::vector<Move>& moves,
+                                       const Move& tt_move,
+                                       int ply);
+    void record_searched_move_class(int ply,
+                                    MoveClass move_class,
+                                    std::uint64_t child_nodes,
+                                    double elapsed_ms);
+    void record_cutoff_move_class(int ply, MoveClass move_class, int cutoff_rank);
+    void record_root_order(const State& state,
+                           const std::vector<std::pair<int, Move>>& scored,
+                           const Move& tt_move);
+    void record_root_search_result(std::size_t ordered_index,
+                                   int score,
+                                   std::uint64_t child_nodes,
+                                   double elapsed_ms);
+    void finalize_root_move_reports();
     TTEntry* probe(std::uint64_t key);
     const TTEntry* probe(std::uint64_t key) const;
     void store(std::uint64_t key, int depth, int score, BoundType bound, const Move& move, int ply);

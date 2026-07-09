@@ -1,127 +1,107 @@
-# Quantum Animal Shogi Engine
+# Quantum Animal Shogi
 
-CPU-only C++17 engine implementing the official rules and 240-action JSON-line
-protocol in [RULE_GAME.md](docs/RULE_GAME.md).
+Engine C++17 cho Quantum Animal Shogi. Repo gồm engine `qas`, test tự động và
+các benchmark hiệu năng/search.
 
-Search is delivered in two verified stages:
+## Yêu cầu
 
-1. Negamax Alpha-Beta with iterative deepening, handcrafted evaluation, move
-   ordering, killer/history heuristics and a fixed-size transposition table.
-2. L_eq canonical successor grouping, injected from `exact/` only after the
-   baseline tests pass.
-3. Resource-aware AB+TT+PVS with aspiration windows, strong ordering and runtime
-   profiles.
-
-No ML, GPU, network, paid dependency or background worker is used.
+- CMake 3.15+
+- Trình biên dịch C++17
+- Windows PowerShell hoặc terminal tương đương
 
 ## Build
 
-```powershell
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
-
-Requirements: CMake 3.15+ and a C++17 compiler. A statically linked Windows build
-is available at `build/qas.exe`.
-
-## Contest protocol
-
-Run without arguments (or use `protocol`) and send one JSON value per line:
+Tạo build folder Release:
 
 ```powershell
-.\build\qas.exe
-.\build\qas.exe protocol 1000 64
-.\build\qas.exe --profile contest_safe
-.\build\qas.exe --profile contest_high_ram --tt-size-mb 2048
-.\build\qas.exe --profile low_ram --tt-size-mb 128
+cmake -S . -B build_stage5 -DCMAKE_BUILD_TYPE=Release
 ```
 
-- `get_action`: stdout contains exactly one integer in `0..239`.
-- `end_game`: stdout contains `"OK"`.
-- Diagnostics go only to stderr.
-- The selected action is validated against the received `action_mask`; if search
-  and environment disagree, the engine uses a mask-enabled legal fallback.
-- While waiting for the next line, the process blocks on stdin and consumes no
-  search CPU.
+Build engine chính:
 
-Official encoding:
+```powershell
+cmake --build build_stage5 --target qas --config Release
+```
+
+File sau khi build:
 
 ```text
-action = source_index * 12 + destination_index
-source: board 0..11 or hand slot 12..19
-destination: board 0..11
+build_stage5\Release\qas.exe
 ```
 
-## Development CLI
+Build toàn bộ target:
 
 ```powershell
-.\build\qas.exe engine-demo
-Get-Content state.txt | .\build\qas.exe search 1000 8
-Get-Content state.txt | .\build\qas.exe search-leq 1000 8 12
-Get-Content state.txt | .\build\qas.exe legal
-.\build\qas_benchmark_all.exe 4
-.\build\qas_selfplay.exe 20 3
-.\build\qas_stage35_benchmark.exe --generate-fixtures --suite generate
-.\build\qas_stage35_benchmark.exe --suite smoke --repeats 7
-.\build\qas_stage35_benchmark.exe --suite fixed --depths 9,10,11,12 --repeats 7
-.\build\qas_stage35_benchmark.exe --suite iterative --time-limits-ms 5000,10000,30000 --repeats 7
-.\build\qas_stage35_benchmark.exe --suite tt --repeats 7
-.\build\qas_stage35_benchmark.exe --suite fixed --leq-threshold 24 --leq-min-depth 4 --leq-min-duplicate-ratio 0.25
-.\build\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode baseline --repeats 7
-.\build\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode optimized --repeats 7
+cmake --build build_stage5 --config Release
 ```
 
-The Stage 3.5 runner writes per-run and median rows, applies a hard timeout,
-checks move/action legality and root hash restoration, and records benchmark-only
-search/resource counters. Use `--position-set all` to include the 100 saved random
-fixtures; the default `required` set contains the ten named positions. The full
-all-mode/depth/time/TT matrix is intentionally not the default because it is a
-multi-day sequential workload.
+## Test
 
-The debug state format starts with `side turn`, followed by eight lines:
+Chạy toàn bộ test:
 
-```text
-<piece-id> <owner> <origin> <square|Hslot> <CGELH-mask>
+```powershell
+ctest --test-dir build_stage5 -C Release --output-on-failure
 ```
 
-## Implemented rules
+Chạy riêng search test:
 
-- Piece-centric state: `board[12]`, eight persistent positions/masks, owner and
-  origin bits, side, turn, terminal result and Zobrist key.
-- Official five-bit order: Chick, Giraffe, Elephant, Lion, Hen.
-- Local move collapse and automatic Chick-to-Hen promotion on the opponent rank.
-- Captured Hen demotes to Chick; a non-final captured Lion candidate loses `L`.
-- Catch occurs when capturing the final Lion candidate of the opponent origin.
-- Try accepts any piece that can be Lion and checks whether a legal immediate
-  capture exists after propagation.
-- Exact fixed-point lineage quotas `CH/G/E/L`, one per origin side.
-- Draw exactly at turn 256; turn is part of Zobrist and canonical keys.
+```powershell
+ctest --test-dir build_stage5 -C Release -R alpha_beta --output-on-failure
+```
 
-## Source layout
+## Chạy engine
 
-- `include/core`, `src/core`: fundamental identity/constraint types.
-- `include/rules`, `src/rules`: state, move tables, legal moves, apply/undo,
-  propagation and terminal rules.
-- `include/search`, `src/search`: Stage 1 Alpha-Beta and TT.
-- `include/exact`, `src/exact`: Stage 2 canonical successor equivalence.
-- `include/io`, `src/io`: JSON protocol and official action codec.
-- `tests`: deterministic rule/search/protocol/invariant tests.
-- `benchmarks`: repeatable Stage 1, A/B L_eq and self-play programs.
+Chạy protocol mặc định:
 
-## Evidence
+```powershell
+build_stage5\Release\qas.exe
+```
 
-- [Architecture note](docs/architecture.md)
-- [Stage 1 benchmark](reports/stage1-benchmark.md)
-- [Stage 2 benchmark](reports/stage2-benchmark.md)
-- [Stage 3 benchmark](reports/stage3-benchmark.md)
-- [Stage 3.5 benchmark and tuning report](reports/stage35-benchmark.md)
-- [Stage 4 evaluation optimization report](reports/stage4/summary.md)
-- [RAM/TT benchmark](reports/ram-benchmark.md)
-- [Stage 3 recommendation](docs/stage3-recommendation.md)
+Chạy search từ file state:
 
-All tests pass under GCC 16.1 with
-`-O3 -Wall -Wextra -Wpedantic -Werror`. The protocol generator/action-mask test
-uses a complete initial-state fixture. No captured real contest message was
-provided, so final validation against server-produced masks must still be run when
-such fixtures are available.
+```powershell
+Get-Content state.txt | build_stage5\Release\qas.exe search 1000 8
+```
+
+## Benchmark
+
+Build benchmark chính:
+
+```powershell
+cmake --build build_stage5 --target qas_stage55_ceiling --config Release
+```
+
+Benchmark nhanh:
+
+```powershell
+build_stage5\Release\qas_stage55_ceiling.exe --mode quick --out-dir local_reports\quick
+```
+
+Stage 5.6 ceiling/overnight style:
+
+```powershell
+build_stage5\Release\qas_stage55_ceiling.exe --mode all --out-dir local_reports\stage56 --runs 3 --timeout-ms 60000 --tt-mb 512
+```
+
+Stage 5.7 ordering audit:
+
+```powershell
+build_stage5\Release\qas_stage55_ceiling.exe --mode ordering --out-dir local_reports\stage57_ordering --runs 3 --timeout-ms 60000 --tt-mb 512
+```
+
+Các file CSV benchmark sẽ nằm trong thư mục truyền qua `--out-dir`.
+
+## Artifact tiện dùng
+
+Nếu cần copy binary ra thư mục artifact:
+
+```powershell
+New-Item -ItemType Directory -Force -Path local_reports\build_artifacts | Out-Null
+Copy-Item build_stage5\Release\qas.exe local_reports\build_artifacts\qas.exe -Force
+```
+
+## Ghi chú
+
+- Không ghi log/protocol phụ ra stdout ngoài output chính thức.
+- Diagnostics nên ghi ra stderr hoặc file report.
+- Sau khi sửa C++, format file đã đổi bằng `clang-format`.

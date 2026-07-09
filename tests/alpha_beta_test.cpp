@@ -171,6 +171,21 @@ void test_benchmark_instrumentation_and_pv() {
           "maximum legal count bounds the average");
     check(!result.pv_line.empty() && result.pv_line.front() == result.best_move,
           "reported PV begins with the legal root move");
+    check(!result.stats.completed_depths.empty() &&
+              !result.stats.completed_depths.back().root_moves.empty(),
+          "instrumented completed depth records root move ordering");
+    check(result.stats.completed_depths.back().root_moves.front().initial_order == 1,
+          "root move reports retain one-based initial ordering");
+    std::uint64_t generated_by_class = 0;
+    std::uint64_t searched_by_class = 0;
+    for (const auto& ply : result.stats.move_class_by_ply) {
+        for (const auto& move_class : ply) {
+            generated_by_class += move_class.generated;
+            searched_by_class += move_class.searched;
+        }
+    }
+    check(generated_by_class > 0 && searched_by_class > 0,
+          "instrumented search records move-class generated and searched counts");
 }
 
 void test_turn_changes_search_key() {

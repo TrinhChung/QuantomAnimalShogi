@@ -963,8 +963,48 @@ qas::SearchOptions search_options(
     return options;
 }
 
+struct OrderingExperiment {
+    std::string name;
+    void (*apply)(qas::SearchOptions& options);
+};
+
+void apply_ordering_baseline(qas::SearchOptions&) {
+}
+
+void apply_hand_drop_boost(qas::SearchOptions& options) {
+    options.hand_drop_ordering_bonus = 90'000;
+}
+
+void apply_immediate_defense_boost(qas::SearchOptions& options) {
+    options.prevent_loss_ordering_bonus = 650'000;
+}
+
+void apply_lion_reduction_boost(qas::SearchOptions& options) {
+    options.lion_reduction_ordering_bonus = 110'000;
+}
+
+void apply_capture_collapse_rebalance(qas::SearchOptions& options) {
+    options.capture_base_ordering_bonus = 220'000;
+    options.capture_value_ordering_multiplier = 24;
+    options.mask_collapse_ordering_bonus = 20'000;
+}
+
+const std::vector<OrderingExperiment>& ordering_experiments() {
+    static const std::vector<OrderingExperiment> experiments{
+        {"baseline", apply_ordering_baseline},
+        {"hand_drop_boost", apply_hand_drop_boost},
+        {"immediate_defense_boost", apply_immediate_defense_boost},
+        {"lion_reduction_boost", apply_lion_reduction_boost},
+        {"capture_collapse_rebalance", apply_capture_collapse_rebalance}};
+    return experiments;
+}
+
 double rate(std::uint64_t part, std::uint64_t total) {
     return total == 0 ? 0.0 : static_cast<double>(part) / static_cast<double>(total);
+}
+
+double rate(double part, double total) {
+    return total <= 0.0 ? 0.0 : part / total;
 }
 
 double non_negative(double value) {
@@ -1016,7 +1056,7 @@ void write_search_row(std::ofstream& output,
                       std::uint64_t previous_nodes) {
     const auto& stats = result.stats;
     const auto& rules = stats.rule_metrics;
-    const bool fixed = mode == "fixed";
+    const bool fixed = mode == "fixed" || mode == "tt_fixed" || mode == "leq" || mode == "ordering";
     const bool completed = fixed ? stats.depth_reached >= depth : stats.depth_reached > 0;
     const double elapsed_seconds = stats.elapsed_ms / 1000.0;
     const double nps = elapsed_seconds <= 0.0 ? 0.0 : stats.searched_nodes / elapsed_seconds;
@@ -1104,6 +1144,423 @@ void write_search_row(std::ofstream& output,
            << estimated_exclusive_leq_ms << ',' << current_peak_rss_mb() << ','
            << current_page_faults() << ',' << illegal_count << ',' << histogram.str() << '\n';
     output.flush();
+}
+
+struct OrderingMeasurement {
+    std::string experiment;
+    std::string fixture;
+    int depth{0};
+    bool completed{false};
+    double elapsed_ms{0.0};
+    double nodes{0.0};
+};
+
+struct PvStabilitySample {
+    std::string experiment;
+    int run{0};
+    bool depth10_completed{false};
+    bool depth11_completed{false};
+    bool depth10_has_pv{false};
+    bool depth11_has_move{false};
+    int depth10_score{0};
+    int depth11_score{0};
+    qas::Move depth10_first_move{};
+    qas::Move depth11_best_move{};
+    std::string depth10_best;
+    std::string depth11_best;
+    std::string depth10_pv;
+    std::string depth11_pv;
+};
+
+const CeilingFixture& require_fixture(const std::vector<CeilingFixture>& corpus,
+                                      const std::string& name) {
+    const auto found = std::find_if(
+        corpus.begin(), corpus.end(), [&](const auto& fixture) { return fixture.name == name; });
+    if (found == corpus.end())
+        throw std::runtime_error("missing required ordering fixture: " + name);
+    return *found;
+}
+
+qas::SearchResult run_ordering_search(const CeilingFixture& fixture,
+                                      int depth,
+                                      int timeout_ms,
+                                      int tt_mb,
+                                      const OrderingExperiment& experiment) {
+    qas::AlphaBetaEngine engine(tt_entries_from_mb(tt_mb));
+    auto options = search_options(depth, timeout_ms, false, LeqMode::Current, true);
+    experiment.apply(options);
+    return engine.find_best_move(fixture.state, options);
+}
+
+void write_move_class_header(std::ofstream& output) {
+    output << "run,experiment,fixture,depth,ply,move_class,generated,searched,cutoffs,"
+              "first_cutoffs,first_cutoff_contribution,avg_cutoff_rank,nodes,node_share,"
+              "elapsed_ms,elapsed_share\n";
+}
+
+void write_move_class_rows(std::ofstream& output,
+                           int run,
+                           const std::string& experiment,
+                           const CeilingFixture& fixture,
+                           int depth,
+                           const qas::SearchResult& result) {
+    if (fixture.name != "duplicate_hands" || (depth != 10 && depth != 11))
+        return;
+    const auto& stats = result.stats;
+    for (std::size_t ply = 0; ply < qas::search_profile_ply_count; ++ply) {
+        std::uint64_t first_cutoffs_at_ply = 0;
+        for (const auto& item : stats.move_class_by_ply[ply])
+            first_cutoffs_at_ply += item.first_cutoffs;
+        for (std::size_t class_index = 0; class_index < qas::move_class_count; ++class_index) {
+            const auto& item = stats.move_class_by_ply[ply][class_index];
+            if (item.generated == 0 && item.searched == 0 && item.cutoffs == 0)
+                continue;
+            output << run << ',' << experiment << ',' << fixture.name << ',' << depth << ',' << ply
+                   << ',' << qas::move_class_name(static_cast<qas::MoveClass>(class_index)) << ','
+                   << item.generated << ',' << item.searched << ',' << item.cutoffs << ','
+                   << item.first_cutoffs << ',' << rate(item.first_cutoffs, first_cutoffs_at_ply)
+                   << ',' << item.average_cutoff_rank() << ',' << item.child_nodes << ','
+                   << rate(item.child_nodes, stats.searched_nodes) << ',' << std::fixed
+                   << std::setprecision(3) << item.elapsed_ms << ','
+                   << rate(item.elapsed_ms, stats.elapsed_ms) << '\n';
+        }
+    }
+    output.flush();
+}
+
+void write_root_header(std::ofstream& output) {
+    output << "run,experiment,fixture,depth,root_score,best_move,pv_line,move,move_class,"
+              "initial_order,static_order_score,searched,searched_score,final_rank,nodes,"
+              "elapsed_ms\n";
+}
+
+void write_root_rows(std::ofstream& output,
+                     int run,
+                     const std::string& experiment,
+                     const CeilingFixture& fixture,
+                     int depth,
+                     const qas::SearchResult& result) {
+    for (const qas::DepthReport& report : result.stats.completed_depths) {
+        if (report.depth != depth)
+            continue;
+        for (const qas::RootMoveReport& root : report.root_moves) {
+            output << run << ',' << experiment << ',' << fixture.name << ',' << depth << ','
+                   << report.score << ',' << move_text(report.best_move) << ','
+                   << join_pv(report.pv_line) << ',' << move_text(root.move) << ','
+                   << qas::move_class_name(root.move_class) << ',' << root.initial_order << ','
+                   << root.static_order_score << ',' << csv_bool(root.searched) << ',';
+            if (root.searched)
+                output << root.searched_score;
+            output << ',' << root.final_rank << ',' << root.child_nodes << ',' << std::fixed
+                   << std::setprecision(3) << root.elapsed_ms << '\n';
+        }
+    }
+    output.flush();
+}
+
+void write_pv_stability_header(std::ofstream& output) {
+    output << "run,experiment,depth10_completed,depth10_best,depth10_score,depth10_pv,"
+              "depth11_completed,depth11_best,depth11_score,depth11_pv,"
+              "depth10_pv_predicts_depth11_best\n";
+}
+
+void update_pv_stability_sample(PvStabilitySample& sample,
+                                const std::string& experiment,
+                                int run,
+                                int depth,
+                                const qas::SearchResult& result) {
+    sample.experiment = experiment;
+    sample.run = run;
+    const bool completed = result.stats.depth_reached >= depth;
+    if (depth == 10) {
+        sample.depth10_completed = completed;
+        sample.depth10_score = result.score;
+        sample.depth10_best = move_text(result.best_move);
+        sample.depth10_pv = join_pv(result.pv_line);
+        sample.depth10_has_pv = !result.pv_line.empty();
+        if (sample.depth10_has_pv)
+            sample.depth10_first_move = result.pv_line.front();
+    } else if (depth == 11) {
+        sample.depth11_completed = completed;
+        sample.depth11_score = result.score;
+        sample.depth11_best = move_text(result.best_move);
+        sample.depth11_pv = join_pv(result.pv_line);
+        sample.depth11_has_move = result.has_move;
+        sample.depth11_best_move = result.best_move;
+    }
+}
+
+void write_pv_stability_rows(
+    std::ofstream& output,
+    const std::map<std::pair<std::string, int>, PvStabilitySample>& samples) {
+    for (const auto& [key, sample] : samples) {
+        (void)key;
+        const bool predicts = sample.depth10_completed && sample.depth11_completed &&
+                              sample.depth10_has_pv && sample.depth11_has_move &&
+                              sample.depth10_first_move == sample.depth11_best_move;
+        output << sample.run << ',' << sample.experiment << ','
+               << csv_bool(sample.depth10_completed) << ',' << sample.depth10_best << ','
+               << sample.depth10_score << ',' << sample.depth10_pv << ','
+               << csv_bool(sample.depth11_completed) << ',' << sample.depth11_best << ','
+               << sample.depth11_score << ',' << sample.depth11_pv << ',' << csv_bool(predicts)
+               << '\n';
+    }
+    output.flush();
+}
+
+double median(std::vector<double> values) {
+    if (values.empty())
+        return 0.0;
+    std::sort(values.begin(), values.end());
+    const std::size_t middle = values.size() / 2;
+    if ((values.size() & 1U) != 0U)
+        return values[middle];
+    return (values[middle - 1] + values[middle]) / 2.0;
+}
+
+double median_metric(const std::vector<OrderingMeasurement>& measurements,
+                     const std::string& experiment,
+                     const std::string& fixture,
+                     int depth,
+                     bool nodes) {
+    std::vector<double> values;
+    for (const OrderingMeasurement& measurement : measurements) {
+        if (measurement.experiment == experiment && measurement.fixture == fixture &&
+            measurement.depth == depth) {
+            values.push_back(nodes ? measurement.nodes : measurement.elapsed_ms);
+        }
+    }
+    return median(values);
+}
+
+int measurement_count(const std::vector<OrderingMeasurement>& measurements,
+                      const std::string& experiment,
+                      const std::string& fixture,
+                      int depth) {
+    return static_cast<int>(std::count_if(
+        measurements.begin(), measurements.end(), [&](const OrderingMeasurement& measurement) {
+            return measurement.experiment == experiment && measurement.fixture == fixture &&
+                   measurement.depth == depth;
+        }));
+}
+
+int completed_measurement_count(const std::vector<OrderingMeasurement>& measurements,
+                                const std::string& experiment,
+                                const std::string& fixture,
+                                int depth) {
+    return static_cast<int>(std::count_if(
+        measurements.begin(), measurements.end(), [&](const OrderingMeasurement& measurement) {
+            return measurement.experiment == experiment && measurement.fixture == fixture &&
+                   measurement.depth == depth && measurement.completed;
+        }));
+}
+
+void write_acceptance_gates(std::ofstream& gate_output,
+                            std::ofstream& regression_output,
+                            const std::vector<OrderingMeasurement>& measurements,
+                            const std::vector<std::string>& regression_fixtures) {
+    gate_output << "experiment,baseline_experiment,duplicate_depth,"
+                   "duplicate_baseline_elapsed_median,duplicate_elapsed_median,"
+                   "duplicate_elapsed_reduction,duplicate_baseline_nodes_median,"
+                   "duplicate_nodes_median,duplicate_nodes_reduction,"
+                   "duplicate_baseline_completed_runs,duplicate_completed_runs,primary_gate_pass,"
+                   "regression_depth,max_elapsed_regression,max_nodes_regression,"
+                   "regression_gate_pass,accepted\n";
+    regression_output << "experiment,fixture,depth,baseline_elapsed_median,"
+                         "experiment_elapsed_median,elapsed_regression,"
+                         "baseline_nodes_median,experiment_nodes_median,nodes_regression,"
+                         "baseline_completed_runs,experiment_completed_runs,gate_pass\n";
+
+    constexpr int duplicate_depth = 11;
+    constexpr int regression_depth = 10;
+    const std::string baseline = "baseline";
+    const double baseline_duplicate_elapsed =
+        median_metric(measurements, baseline, "duplicate_hands", duplicate_depth, false);
+    const double baseline_duplicate_nodes =
+        median_metric(measurements, baseline, "duplicate_hands", duplicate_depth, true);
+    const int baseline_duplicate_count =
+        measurement_count(measurements, baseline, "duplicate_hands", duplicate_depth);
+    const int baseline_duplicate_completed =
+        completed_measurement_count(measurements, baseline, "duplicate_hands", duplicate_depth);
+
+    for (const OrderingExperiment& experiment : ordering_experiments()) {
+        if (experiment.name == baseline)
+            continue;
+        const double experiment_duplicate_elapsed =
+            median_metric(measurements, experiment.name, "duplicate_hands", duplicate_depth, false);
+        const double experiment_duplicate_nodes =
+            median_metric(measurements, experiment.name, "duplicate_hands", duplicate_depth, true);
+        const int experiment_duplicate_count =
+            measurement_count(measurements, experiment.name, "duplicate_hands", duplicate_depth);
+        const int experiment_duplicate_completed = completed_measurement_count(
+            measurements, experiment.name, "duplicate_hands", duplicate_depth);
+        const double elapsed_reduction =
+            baseline_duplicate_elapsed <= 0.0
+                ? 0.0
+                : 1.0 - experiment_duplicate_elapsed / baseline_duplicate_elapsed;
+        const double node_reduction =
+            baseline_duplicate_nodes <= 0.0
+                ? 0.0
+                : 1.0 - experiment_duplicate_nodes / baseline_duplicate_nodes;
+        const bool duplicate_completed =
+            baseline_duplicate_count > 0 && experiment_duplicate_count > 0 &&
+            baseline_duplicate_completed == baseline_duplicate_count &&
+            experiment_duplicate_completed == experiment_duplicate_count;
+        const bool primary_gate =
+            duplicate_completed && (node_reduction >= 0.20 || elapsed_reduction >= 0.20);
+
+        bool regression_gate = true;
+        double max_elapsed_regression = 0.0;
+        double max_node_regression = 0.0;
+        for (const std::string& fixture : regression_fixtures) {
+            const double baseline_elapsed =
+                median_metric(measurements, baseline, fixture, regression_depth, false);
+            const double experiment_elapsed =
+                median_metric(measurements, experiment.name, fixture, regression_depth, false);
+            const double baseline_nodes =
+                median_metric(measurements, baseline, fixture, regression_depth, true);
+            const double experiment_nodes =
+                median_metric(measurements, experiment.name, fixture, regression_depth, true);
+            const int baseline_count =
+                measurement_count(measurements, baseline, fixture, regression_depth);
+            const int experiment_count =
+                measurement_count(measurements, experiment.name, fixture, regression_depth);
+            const int baseline_completed =
+                completed_measurement_count(measurements, baseline, fixture, regression_depth);
+            const int experiment_completed = completed_measurement_count(
+                measurements, experiment.name, fixture, regression_depth);
+            const double elapsed_regression =
+                baseline_elapsed <= 0.0 ? 1.0 : experiment_elapsed / baseline_elapsed - 1.0;
+            const double node_regression =
+                baseline_nodes <= 0.0 ? 1.0 : experiment_nodes / baseline_nodes - 1.0;
+            max_elapsed_regression =
+                std::max(max_elapsed_regression, std::max(0.0, elapsed_regression));
+            max_node_regression = std::max(max_node_regression, std::max(0.0, node_regression));
+            const bool completed = baseline_count > 0 && experiment_count > 0 &&
+                                   baseline_completed == baseline_count &&
+                                   experiment_completed == experiment_count;
+            const bool fixture_gate =
+                completed && elapsed_regression <= 0.05 && node_regression <= 0.05;
+            regression_gate &= fixture_gate;
+            regression_output << experiment.name << ',' << fixture << ',' << regression_depth << ','
+                              << baseline_elapsed << ',' << experiment_elapsed << ','
+                              << elapsed_regression << ',' << baseline_nodes << ','
+                              << experiment_nodes << ',' << node_regression << ','
+                              << baseline_completed << '/' << baseline_count << ','
+                              << experiment_completed << '/' << experiment_count << ','
+                              << csv_bool(fixture_gate) << '\n';
+        }
+
+        gate_output << experiment.name << ',' << baseline << ',' << duplicate_depth << ','
+                    << baseline_duplicate_elapsed << ',' << experiment_duplicate_elapsed << ','
+                    << elapsed_reduction << ',' << baseline_duplicate_nodes << ','
+                    << experiment_duplicate_nodes << ',' << node_reduction << ','
+                    << baseline_duplicate_completed << '/' << baseline_duplicate_count << ','
+                    << experiment_duplicate_completed << '/' << experiment_duplicate_count << ','
+                    << csv_bool(primary_gate) << ',' << regression_depth << ','
+                    << max_elapsed_regression << ',' << max_node_regression << ','
+                    << csv_bool(regression_gate) << ',' << csv_bool(primary_gate && regression_gate)
+                    << '\n';
+    }
+    gate_output.flush();
+    regression_output.flush();
+}
+
+void run_ordering_matrix(const std::vector<CeilingFixture>& corpus, const Options& options) {
+    static const std::vector<std::string> regression_names{"initial",
+                                                           "high_uncertainty_midgame",
+                                                           "random_ply4_18",
+                                                           "many_hands",
+                                                           "high_branching_hand_stack"};
+    const CeilingFixture duplicate = require_fixture(corpus, "duplicate_hands");
+    std::vector<CeilingFixture> regression_fixtures;
+    regression_fixtures.reserve(regression_names.size());
+    for (const std::string& name : regression_names)
+        regression_fixtures.push_back(require_fixture(corpus, name));
+
+    std::filesystem::create_directories(options.out_dir);
+    std::ofstream search_output(std::filesystem::path(options.out_dir) / "ordering_search.csv");
+    std::ofstream class_output(std::filesystem::path(options.out_dir) / "move_class_cutoffs.csv");
+    std::ofstream root_output(std::filesystem::path(options.out_dir) / "root_stability.csv");
+    std::ofstream pv_output(std::filesystem::path(options.out_dir) / "pv_stability.csv");
+    std::ofstream gate_output(std::filesystem::path(options.out_dir) / "acceptance_gates.csv");
+    std::ofstream regression_output(std::filesystem::path(options.out_dir) /
+                                    "acceptance_regressions.csv");
+    write_search_header(search_output);
+    write_move_class_header(class_output);
+    write_root_header(root_output);
+    write_pv_stability_header(pv_output);
+
+    std::vector<OrderingMeasurement> measurements;
+    std::map<std::pair<std::string, int>, PvStabilitySample> pv_samples;
+    for (int run = 1; run <= options.runs; ++run) {
+        for (const OrderingExperiment& experiment : ordering_experiments()) {
+            std::uint64_t previous_duplicate_nodes = 0;
+            for (int depth : {10, 11}) {
+                const auto result = run_ordering_search(
+                    duplicate, depth, options.timeout_ms, options.tt_mb, experiment);
+                write_search_row(search_output,
+                                 run,
+                                 duplicate,
+                                 "ordering",
+                                 LeqMode::Current,
+                                 options.tt_mb,
+                                 depth,
+                                 options.timeout_ms,
+                                 result,
+                                 previous_duplicate_nodes);
+                previous_duplicate_nodes = result.stats.searched_nodes;
+                write_move_class_rows(class_output, run, experiment.name, duplicate, depth, result);
+                write_root_rows(root_output, run, experiment.name, duplicate, depth, result);
+                update_pv_stability_sample(
+                    pv_samples[{experiment.name, run}], experiment.name, run, depth, result);
+                measurements.push_back(
+                    OrderingMeasurement{experiment.name,
+                                        duplicate.name,
+                                        depth,
+                                        result.stats.depth_reached >= depth,
+                                        result.stats.elapsed_ms,
+                                        static_cast<double>(result.stats.searched_nodes)});
+                std::cout << "ordering run=" << run << " experiment=" << experiment.name
+                          << " fixture=" << duplicate.name << " depth=" << depth
+                          << " completed=" << (result.stats.depth_reached >= depth ? "yes" : "no")
+                          << " elapsed_ms=" << result.stats.elapsed_ms << '\n';
+            }
+
+            for (const CeilingFixture& fixture : regression_fixtures) {
+                constexpr int regression_depth = 10;
+                const auto result = run_ordering_search(
+                    fixture, regression_depth, options.timeout_ms, options.tt_mb, experiment);
+                write_search_row(search_output,
+                                 run,
+                                 fixture,
+                                 "ordering",
+                                 LeqMode::Current,
+                                 options.tt_mb,
+                                 regression_depth,
+                                 options.timeout_ms,
+                                 result,
+                                 0);
+                write_root_rows(
+                    root_output, run, experiment.name, fixture, regression_depth, result);
+                measurements.push_back(
+                    OrderingMeasurement{experiment.name,
+                                        fixture.name,
+                                        regression_depth,
+                                        result.stats.depth_reached >= regression_depth,
+                                        result.stats.elapsed_ms,
+                                        static_cast<double>(result.stats.searched_nodes)});
+                std::cout << "ordering run=" << run << " experiment=" << experiment.name
+                          << " fixture=" << fixture.name << " depth=" << regression_depth
+                          << " completed="
+                          << (result.stats.depth_reached >= regression_depth ? "yes" : "no")
+                          << " elapsed_ms=" << result.stats.elapsed_ms << '\n';
+            }
+        }
+    }
+
+    write_pv_stability_rows(pv_output, pv_samples);
+    write_acceptance_gates(gate_output, regression_output, measurements, regression_names);
 }
 
 qas::SearchResult run_search(const CeilingFixture& fixture,
@@ -1425,6 +1882,10 @@ int main(int argc, char* argv[]) {
             return EXIT_SUCCESS;
         if (options.mode == "validate") {
             run_validation(corpus, options);
+            return EXIT_SUCCESS;
+        }
+        if (options.mode == "ordering") {
+            run_ordering_matrix(corpus, options);
             return EXIT_SUCCESS;
         }
         if (options.mode == "fixed" || options.mode == "quick")
