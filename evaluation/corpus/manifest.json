@@ -1,0 +1,11 @@
+{
+  "corpus_revision": 1,
+  "created_at_utc": "2026-07-10T15:54:00Z",
+  "fixture_count": 256,
+  "fixtures_file": "corpus-v1.jsonl",
+  "fixtures_sha256": "ef2bba06f492f893a9de37756061f20e277992268a06317fd4b613f7c92cdba3",
+  "generation_seed": 1363235637,
+  "generator": "evaluation.tools.corpus.generate_corpus",
+  "immutability_rule": "Adding or changing fixtures requires a new corpus revision.",
+  "schema_version": 1
+}

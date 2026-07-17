@@ -65,3 +65,21 @@ chi phí canonicalization. Default dùng trigger:
 explicit. Generation cache chưa được thêm: benchmark
 cho thấy trigger rẻ đã loại overhead ở node không có duplicate, còn cache sẽ tăng
 memory/invalidations mà chưa có bằng chứng mang lại lợi ích.
+# Evaluation infrastructure boundary
+
+The versioned `evaluation/` tree is external orchestration, not a production engine module.
+Python owns immutable artifacts, process control, logging, statistics, resume state, and reports.
+It does not implement or approximate game rules.
+
+Two application-boundary executables link `qas_core`:
+
+- `qas_evaluation_referee` is the single match/corpus transition authority. It generates the
+  side-normalized official observation and action mask, maps the chosen public action back to the
+  native state, and calls `rules::apply_move`.
+- `qas_evaluation_benchmark` runs the exact version's search implementation with explicit fixed or
+  time-controlled options and emits machine-readable telemetry. It is frozen beside each accepted
+  `qas.exe`.
+
+The dependency remains one-way: evaluation tools may depend on core, rules, search, exact, and IO;
+production modules never depend on evaluation code. Contest stdout and search semantics are
+unchanged.

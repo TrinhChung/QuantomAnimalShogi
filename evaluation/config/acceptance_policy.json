@@ -1,0 +1,70 @@
+{
+  "schema_version": 2,
+  "bootstrap_confidence": 0.95,
+  "bootstrap_seed": 1363231526,
+  "minimum_bootstrap_samples": 10000,
+  "correctness": {
+    "require_all_rule_tests": true,
+    "maximum_candidate_illegal_actions": 0,
+    "maximum_transition_inconsistencies": 0,
+    "maximum_unexplained_fixed_depth_score_mismatches": 0,
+    "require_saved_game_replay": true
+  },
+  "reliability": {
+    "maximum_candidate_crashes": 0,
+    "maximum_candidate_malformed_outputs": 0,
+    "maximum_candidate_protocol_desynchronizations": 0,
+    "maximum_candidate_external_timeouts": 0,
+    "require_resume_integrity": true
+  },
+  "performance_upgrade": {
+    "minimum_elapsed_improvement": 0.05,
+    "minimum_node_improvement": 0.10,
+    "maximum_critical_fixture_elapsed_regression": 0.05,
+    "minimum_strength_lower_bound": 0.48
+  },
+  "fixed_time": {
+    "maximum_depth_regressions": 0,
+    "maximum_fallback_rate_delta": 0.0,
+    "maximum_hard_stop_rate_delta": 0.05,
+    "maximum_hard_limit_overshoot_ms": 25.0
+  },
+  "statistics": {
+    "minimum_valid_pairs_for_claim": 30,
+    "maximum_equivalence_ci_width": 0.08,
+    "target_ci_half_width": 0.02,
+    "reject_degenerate_empirical_interval_without_finite_sample_floor": true
+  },
+  "category_requirements": {
+    "optimization_only": {"strict_fixed_scores": true, "require_strength_non_regression": true},
+    "performance_only": {"strict_fixed_scores": true, "require_strength_non_regression": true},
+    "move_ordering": {"strict_fixed_scores": true, "allow_equal_score_tiebreak": true},
+    "search_control": {"strict_fixed_scores": true, "require_completed_depth_truth": true},
+    "selective_search": {"require_reference_checks": true, "require_strength_upgrade": true},
+    "pruning_change": {"require_reference_checks": true, "require_strength_upgrade": true},
+    "canonicalization_change": {"require_reference_checks": true, "require_strength_upgrade": true},
+    "evaluation_change": {"strict_fixed_scores": false, "require_strength_upgrade": true},
+    "architecture_change": {"require_fixed_time_non_regression": true, "require_strength_upgrade": true},
+    "mixed": {"require_fixed_time_non_regression": true, "require_strength_upgrade": true},
+    "rule_change": {"require_separate_rule_audit": true}
+  },
+  "strength_upgrade": {
+    "minimum_champion_lower_bound_exclusive": 0.50,
+    "minimum_anchor_lower_bound": 0.50,
+    "maximum_production_speed_regression": 0.10,
+    "maximum_peak_memory_regression": 0.20
+  },
+  "strength_rejection": {
+    "maximum_upper_bound": 0.50
+  },
+  "classifications": [
+    "ACCEPT_STRENGTH_UPGRADE",
+    "ACCEPT_PERFORMANCE_UPGRADE",
+    "ACCEPT_EQUIVALENT_REPLACEMENT",
+    "REJECT_CORRECTNESS",
+    "REJECT_RELIABILITY",
+    "REJECT_PERFORMANCE",
+    "REJECT_STRENGTH",
+    "INCONCLUSIVE"
+  ]
+}

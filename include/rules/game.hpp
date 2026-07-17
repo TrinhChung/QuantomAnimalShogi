@@ -91,6 +91,9 @@ bool propagate(State& state, PropagationMode mode);
 void recompute_hash(State& state);
 std::uint64_t zobrist_hash(const State& state);
 
+// Applies one complete transition. On success, propagation has reached a fixed point and the
+// stored hash matches the resulting state. On failure, state is restored to its input value.
+// On success, undo restores every value-relevant field through undo_move.
 bool apply_move(State& state, const Move& move, Undo& undo);
 bool apply_move(State& state, const Move& move, Undo& undo, PropagationMode mode);
 bool apply_move_profiled(State& state, const Move& move, Undo& undo, RuleMetrics& metrics);

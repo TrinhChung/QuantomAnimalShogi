@@ -1,0 +1,27 @@
+{
+  "current_champion": "stage5-clean",
+  "schema_version": 1,
+  "stable_anchor": "stage5-clean",
+  "versions": [
+    {
+      "accepted": true,
+      "binary_path": "stage5-clean/qas.exe",
+      "binary_sha256": "76c3213168f542d2122ac9a14a0fd7592a6c1395e0c521e1f2e73a4acf38b0e5",
+      "branch": "master",
+      "build_type": "Release",
+      "change_category": "architecture_change",
+      "commit": "5e096227947cf53c760a027318e26183863483f3",
+      "compiler": "MSVC 19.44.35228.0",
+      "compiler_flags": "/DWIN32 /D_WINDOWS /GR /EHsc /O2 /Ob2 /DNDEBUG",
+      "config_path": "stage5-clean/engine_config.json",
+      "config_sha256": "ac2573fb2923f05b2fa9825d127fbce77a43b611754380b4a2066822cd8d91a6",
+      "created_at_utc": "2026-07-10T15:58:50Z",
+      "dirty": true,
+      "display_name": "Stage 5.0 Clean",
+      "manifest_sha256": "db79f39250eb3342553e9fd49ff54ac368640b244ff29f4f084f310cc3674ea8",
+      "notes": "Permanent Stage 5.0 engine anchor; worktree dirtiness is evaluation infrastructure only and production engine sources are unchanged.",
+      "parent_version": null,
+      "version_id": "stage5-clean"
+    }
+  ]
+}

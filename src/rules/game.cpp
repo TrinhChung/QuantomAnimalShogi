@@ -496,6 +496,113 @@ int lion_candidates_for_origin(const State& state, int target_piece) {
     return count;
 }
 
+class ApplyMoveMetricsRecorder {
+   public:
+    explicit ApplyMoveMetricsRecorder(RuleMetrics* metrics) : metrics_(metrics) {
+        if (metrics_ != nullptr) {
+            ++metrics_->apply_move_internal_calls;
+            start_ = std::chrono::steady_clock::now();
+        }
+    }
+
+    bool finish(bool success) {
+        if (metrics_ != nullptr) {
+            if (success)
+                ++metrics_->apply_move_internal_successes;
+            else
+                ++metrics_->apply_move_internal_failures;
+            metrics_->apply_move_internal_ms +=
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
+                    .count();
+        }
+        return success;
+    }
+
+   private:
+    RuleMetrics* metrics_{nullptr};
+    std::chrono::steady_clock::time_point start_{};
+};
+
+bool move_preconditions_hold(const State& state, const Move& move) {
+    if (state.terminal != Terminal::None || !move.valid())
+        return false;
+    const int piece = move.piece;
+    const Side mover = state.side_to_move;
+    if (!owned_by(state, piece, mover) || state.pos[piece] != move.from)
+        return false;
+    return state.board[move.to] < 0 || !owned_by(state, state.board[move.to], mover);
+}
+
+bool apply_move_origin_effects(State& state, const Move& move, Side mover) {
+    if (is_hand_position(move.from))
+        return state.board[move.to] == -1;
+
+    const int piece = move.piece;
+    if (move.from >= board_size || state.board[move.from] != piece)
+        return false;
+    const Mask movers = move_tables().move_possible_mask[side_index(mover)][move.from][move.to];
+    state.mask[piece] &= movers;
+    if (state.mask[piece] == 0)
+        return false;
+
+    if (is_back_rank(move.to, mover) && contains(state.mask[piece], Animal::Chick)) {
+        state.mask[piece] &= static_cast<Mask>(~bit(Animal::Chick));
+        state.mask[piece] |= bit(Animal::Hen);
+    }
+    state.board[move.from] = -1;
+    return true;
+}
+
+bool capture_destination_piece(State& state, const Move& move, Side mover, bool& catch_win) {
+    const int captured = state.board[move.to];
+    if (captured < 0)
+        return true;
+
+    // Catch is determined from the identity mask before capture removes Lion from that mask.
+    catch_win = contains(state.mask[captured], Animal::Lion) &&
+                lion_candidates_for_origin(state, captured) == 1;
+    const int hand_slot = unused_hand_slot(state, captured);
+    if (hand_slot < 0)
+        return false;
+    state.pos[captured] = static_cast<std::uint8_t>(hand_slot);
+    if (mover == Side::North)
+        state.owner_bits |= static_cast<std::uint8_t>(1U << captured);
+    else
+        state.owner_bits &= static_cast<std::uint8_t>(~(1U << captured));
+
+    Mask captured_mask = state.mask[captured];
+    if (contains(captured_mask, Animal::Hen)) {
+        captured_mask &= static_cast<Mask>(~bit(Animal::Hen));
+        captured_mask |= bit(Animal::Chick);
+    }
+    if (!catch_win)
+        captured_mask &= static_cast<Mask>(~bit(Animal::Lion));
+    state.mask[captured] = captured_mask;
+    return true;
+}
+
+void complete_board_transition(State& state, const Move& move, Side mover) {
+    state.board[move.to] = static_cast<std::int8_t>(move.piece);
+    state.pos[move.piece] = move.to;
+    ++state.turn;
+    state.side_to_move = opposite(mover);
+}
+
+bool propagate_transition(State& state, PropagationMode mode, RuleMetrics* metrics) {
+    if (metrics == nullptr)
+        return propagate(state, mode);
+
+    const auto propagation_start = std::chrono::steady_clock::now();
+    std::uint64_t propagation_iterations = 0;
+    const bool succeeded = propagate_impl(state, mode, &propagation_iterations);
+    const auto propagation_end = std::chrono::steady_clock::now();
+    ++metrics->propagation_calls;
+    metrics->propagation_iterations += propagation_iterations;
+    metrics->propagation_ms +=
+        std::chrono::duration<double, std::milli>(propagation_end - propagation_start).count();
+    return succeeded;
+}
+
 bool apply_move_internal(State& state,
                          const Move& move,
                          Undo& undo,
@@ -520,128 +627,71 @@ bool can_capture_piece_immediately(const State& state,
     return false;
 }
 
-bool apply_move_internal(State& state,
-                         const Move& move,
-                         Undo& undo,
-                         PropagationMode mode,
-                         bool detect_try,
-                         RuleMetrics* metrics) {
-    std::chrono::steady_clock::time_point apply_begin;
-    if (metrics != nullptr) {
-        ++metrics->apply_move_internal_calls;
-        apply_begin = std::chrono::steady_clock::now();
-    }
-    auto finish = [metrics, &apply_begin](bool success) {
-        if (metrics != nullptr) {
-            if (success)
-                ++metrics->apply_move_internal_successes;
-            else
-                ++metrics->apply_move_internal_failures;
-            metrics->apply_move_internal_ms += std::chrono::duration<double, std::milli>(
-                                                   std::chrono::steady_clock::now() - apply_begin)
-                                                   .count();
-        }
-        return success;
-    };
-    undo.previous = state;
-    auto reject = [&state, &undo, &finish]() {
-        state = undo.previous;
-        return finish(false);
-    };
-    if (state.terminal != Terminal::None || !move.valid())
-        return reject();
-    const int piece = move.piece;
-    const Side mover = state.side_to_move;
-    if (!owned_by(state, piece, mover) || state.pos[piece] != move.from)
-        return reject();
-    if (state.board[move.to] >= 0 && owned_by(state, state.board[move.to], mover))
-        return reject();
-
-    bool catch_win = false;
-    if (is_hand_position(move.from)) {
-        if (state.board[move.to] != -1)
-            return reject();
-    } else {
-        if (move.from >= board_size || state.board[move.from] != piece)
-            return reject();
-        const Mask movers = move_tables().move_possible_mask[side_index(mover)][move.from][move.to];
-        state.mask[piece] &= movers;
-        if (state.mask[piece] == 0)
-            return reject();
-
-        if (is_back_rank(move.to, mover) && contains(state.mask[piece], Animal::Chick)) {
-            state.mask[piece] &= static_cast<Mask>(~bit(Animal::Chick));
-            state.mask[piece] |= bit(Animal::Hen);
-        }
-        state.board[move.from] = -1;
-    }
-
-    const int captured = state.board[move.to];
-    if (captured >= 0) {
-        catch_win = contains(state.mask[captured], Animal::Lion) &&
-                    lion_candidates_for_origin(state, captured) == 1;
-        const int hand_slot = unused_hand_slot(state, captured);
-        if (hand_slot < 0)
-            return reject();
-        state.pos[captured] = static_cast<std::uint8_t>(hand_slot);
-        if (mover == Side::North)
-            state.owner_bits |= static_cast<std::uint8_t>(1U << captured);
-        else
-            state.owner_bits &= static_cast<std::uint8_t>(~(1U << captured));
-        Mask captured_mask = state.mask[captured];
-        if (contains(captured_mask, Animal::Hen)) {
-            captured_mask &= static_cast<Mask>(~bit(Animal::Hen));
-            captured_mask |= bit(Animal::Chick);
-        }
-        if (!catch_win)
-            captured_mask &= static_cast<Mask>(~bit(Animal::Lion));
-        state.mask[captured] = captured_mask;
-    }
-
-    state.board[move.to] = static_cast<std::int8_t>(piece);
-    state.pos[piece] = move.to;
-    ++state.turn;
-    state.side_to_move = opposite(mover);
-
-    bool propagation_succeeded = false;
-    if (metrics != nullptr) {
-        const auto propagation_start = std::chrono::steady_clock::now();
-        std::uint64_t propagation_iterations = 0;
-        propagation_succeeded = propagate_impl(state, mode, &propagation_iterations);
-        const auto propagation_end = std::chrono::steady_clock::now();
-        ++metrics->propagation_calls;
-        metrics->propagation_iterations += propagation_iterations;
-        metrics->propagation_ms +=
-            std::chrono::duration<double, std::milli>(propagation_end - propagation_start).count();
-    } else {
-        propagation_succeeded = propagate(state, mode);
-    }
-    if (!propagation_succeeded)
-        return reject();
-
+void update_terminal_status(State& state,
+                            const Move& move,
+                            Side mover,
+                            bool catch_win,
+                            bool detect_try,
+                            PropagationMode mode,
+                            RuleMetrics* metrics) {
+    // Official terminal priority is Catch, then Try, then the turn-limit draw.
     if (catch_win) {
         state.terminal = Terminal::Catch;
         state.winner = static_cast<std::int8_t>(side_index(mover));
-    } else if (detect_try && contains(state.mask[piece], Animal::Lion) &&
+    } else if (detect_try && contains(state.mask[move.piece], Animal::Lion) &&
                is_back_rank(move.to, mover) &&
-               !can_capture_piece_immediately(state, piece, mode, metrics)) {
+               !can_capture_piece_immediately(state, move.piece, mode, metrics)) {
         state.terminal = Terminal::Try;
         state.winner = static_cast<std::int8_t>(side_index(mover));
     } else if (state.turn >= 256) {
         state.terminal = Terminal::Draw;
         state.winner = -1;
     }
-    if (metrics != nullptr) {
-        const auto hash_begin = std::chrono::steady_clock::now();
+}
+
+void recompute_transition_hash(State& state, RuleMetrics* metrics) {
+    if (metrics == nullptr) {
         recompute_hash(state);
-        const auto hash_end = std::chrono::steady_clock::now();
-        ++metrics->hash_recompute_calls;
-        metrics->hash_recompute_ms +=
-            std::chrono::duration<double, std::milli>(hash_end - hash_begin).count();
-    } else {
-        recompute_hash(state);
+        return;
     }
-    return finish(true);
+
+    const auto hash_begin = std::chrono::steady_clock::now();
+    recompute_hash(state);
+    const auto hash_end = std::chrono::steady_clock::now();
+    ++metrics->hash_recompute_calls;
+    metrics->hash_recompute_ms +=
+        std::chrono::duration<double, std::milli>(hash_end - hash_begin).count();
+}
+
+bool apply_move_internal(State& state,
+                         const Move& move,
+                         Undo& undo,
+                         PropagationMode mode,
+                         bool detect_try,
+                         RuleMetrics* metrics) {
+    ApplyMoveMetricsRecorder metrics_recorder(metrics);
+    undo.previous = state;
+    auto reject = [&state, &undo, &metrics_recorder]() {
+        state = undo.previous;
+        return metrics_recorder.finish(false);
+    };
+    if (!move_preconditions_hold(state, move))
+        return reject();
+
+    const Side mover = state.side_to_move;
+    // Keep these phases ordered: identity collapse/promotion, capture, placement, propagation,
+    // terminal detection, and finally hashing.
+    if (!apply_move_origin_effects(state, move, mover))
+        return reject();
+    bool catch_win = false;
+    if (!capture_destination_piece(state, move, mover, catch_win))
+        return reject();
+    complete_board_transition(state, move, mover);
+    if (!propagate_transition(state, mode, metrics))
+        return reject();
+    update_terminal_status(state, move, mover, catch_win, detect_try, mode, metrics);
+    recompute_transition_hash(state, metrics);
+    return metrics_recorder.finish(true);
 }
 
 }  // namespace

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qas.local/schemas/manifest.schema.json",
+  "title": "Frozen engine version manifest",
+  "type": "object",
+  "required": ["schema_version", "version_id", "binary_sha256", "config_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}

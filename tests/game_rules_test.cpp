@@ -252,6 +252,37 @@ void test_promotion_try_and_draw() {
     check(draw.terminal == qas::Terminal::Draw, "turn 256 is a draw");
 }
 
+void test_hand_drop_illegal_transition_and_terminal_priority() {
+    qas::State drop = exact_state();
+    drop.board[drop.pos[0]] = -1;
+    drop.pos[0] = qas::first_hand_slot;
+    qas::recompute_hash(drop);
+    const qas::Mask mask_before = drop.mask[0];
+    qas::Undo undo;
+    check(qas::apply_move(drop, qas::Move{0, qas::first_hand_slot, 3}, undo),
+          "owned hand piece drops onto an empty square");
+    check(drop.pos[0] == 3 && drop.board[3] == 0,
+          "hand drop places the selected physical piece on the board");
+    check(drop.mask[0] == mask_before, "hand drop does not collapse the identity mask");
+
+    qas::State illegal = qas::initial_state();
+    const qas::State before_illegal = illegal;
+    check(!qas::apply_move(illegal, qas::Move{0, 0, 3}, undo),
+          "move with a mismatched physical source is rejected");
+    check(qas::same_state(illegal, before_illegal),
+          "rejected transition leaves every state field and hash unchanged");
+
+    qas::State priority = exact_state();
+    move_all_to_hands(priority);
+    place(priority, 0, 4);
+    place(priority, 4, 1);
+    priority.turn = 255;
+    qas::recompute_hash(priority);
+    check(qas::apply_move(priority, qas::Move{0, 4, 1}, undo), "turn-256 Catch transition applies");
+    check(priority.terminal == qas::Terminal::Catch && priority.winner == 0,
+          "Catch has priority over the turn-256 draw");
+}
+
 void test_turn_is_hashed_and_parse_roundtrip() {
     qas::State first = qas::initial_state();
     qas::State second = first;
@@ -325,6 +356,7 @@ int main() {
     test_catch();
     test_capture_collapse_and_demotion();
     test_promotion_try_and_draw();
+    test_hand_drop_illegal_transition_and_terminal_priority();
     test_turn_is_hashed_and_parse_roundtrip();
     test_seeded_playout_full_unwind();
     test_initial_perft();

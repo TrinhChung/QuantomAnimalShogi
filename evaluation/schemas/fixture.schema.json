@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qas.local/schemas/fixture.schema.json",
+  "title": "Permanent evaluation fixture",
+  "type": "object",
+  "required": [
+    "schema_version", "corpus_revision", "fixture_id", "full_serialized_state",
+    "structural_hash", "generation_seed", "generation_action_sequence", "turn",
+    "side_to_move", "remaining_horizon", "legal_action_count", "uncertainty_score",
+    "hand_piece_count", "lion_candidate_counts", "category_labels"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "corpus_revision": {"type": "integer", "minimum": 1},
+    "fixture_id": {"type": "string"},
+    "full_serialized_state": {"type": "string"},
+    "structural_hash": {"type": "integer", "minimum": 0},
+    "category_labels": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  },
+  "additionalProperties": true
+}

@@ -120,6 +120,21 @@ The debug state format starts with `side turn`, followed by eight lines:
 - [RAM/TT benchmark](reports/ram-benchmark.md)
 - [Stage 3 recommendation](docs/stage3-recommendation.md)
 
+## Permanent version evaluation
+
+All future candidates use the standardized system in
+[evaluation/README.md](evaluation/README.md). After building all Release targets, run only:
+
+```powershell
+scripts\evaluate_built_candidate.bat ^
+  --candidate-exe "build\Release\qas.exe" ^
+  --candidate-name "Stage 5.1" ^
+  --change-category performance_only ^
+  --profile strength_candidate
+```
+
+Read the generated `report.md`; do not substitute manual benchmarks or ad-hoc self-play.
+
 All tests pass under GCC 16.1 with
 `-O3 -Wall -Wextra -Wpedantic -Werror`. The protocol generator/action-mask test
 uses a complete initial-state fixture. No captured real contest message was

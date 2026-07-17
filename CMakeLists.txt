@@ -19,6 +19,57 @@ endif()
 add_executable(qas src/main.cpp)
 target_link_libraries(qas PRIVATE qas_core)
 
+# Evaluation-only application-boundary tools. These reuse the production rules and
+# search implementations but do not change the contest executable or its protocol.
+add_executable(qas_evaluation_referee evaluation/native/referee_adapter.cpp)
+target_link_libraries(qas_evaluation_referee PRIVATE qas_core)
+
+add_executable(qas_evaluation_benchmark evaluation/native/benchmark_driver.cpp)
+target_link_libraries(qas_evaluation_benchmark PRIVATE qas_core)
+add_dependencies(qas_evaluation_benchmark qas qas_evaluation_referee)
+if(WIN32)
+    target_link_libraries(qas_evaluation_benchmark PRIVATE psapi)
+endif()
+
+# Bind the evaluation helper to the exact contest/referee artifacts produced by this build.
+# The evaluation pipeline verifies this sidecar before any acceptance-capable run.
+find_package(Git QUIET)
+set(QAS_BUILD_GIT_COMMIT "unknown")
+set(QAS_BUILD_GIT_DIRTY "unknown")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE QAS_BUILD_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" status --porcelain
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE QAS_BUILD_GIT_STATUS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(QAS_BUILD_GIT_STATUS STREQUAL "")
+        set(QAS_BUILD_GIT_DIRTY "false")
+    else()
+        set(QAS_BUILD_GIT_DIRTY "true")
+    endif()
+endif()
+add_custom_command(
+    TARGET qas_evaluation_benchmark POST_BUILD
+    COMMAND "${CMAKE_COMMAND}"
+        -DQAS_EXE=$<TARGET_FILE:qas>
+        -DBENCHMARK_EXE=$<TARGET_FILE:qas_evaluation_benchmark>
+        -DREFEREE_EXE=$<TARGET_FILE:qas_evaluation_referee>
+        -DOUTPUT_FILE=$<TARGET_FILE_DIR:qas_evaluation_benchmark>/qas_evaluation_build_manifest.json
+        -DBUILD_CONFIGURATION=$<CONFIG>
+        -DCOMPILER_ID=${CMAKE_CXX_COMPILER_ID}
+        -DCOMPILER_VERSION=${CMAKE_CXX_COMPILER_VERSION}
+        -DGIT_COMMIT=${QAS_BUILD_GIT_COMMIT}
+        -DGIT_DIRTY=${QAS_BUILD_GIT_DIRTY}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/evaluation/cmake/write_build_manifest.cmake"
+    VERBATIM)
+
 add_executable(qas_benchmark_stage1 benchmarks/stage1_benchmark.cpp)
 target_link_libraries(qas_benchmark_stage1 PRIVATE qas_core)
 
@@ -85,4 +136,13 @@ if(BUILD_TESTING)
     add_test(NAME evaluation_optimization COMMAND qas_eval_optimization_tests)
     set_tests_properties(evaluation_optimization PROPERTIES
                          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME evaluation_framework
+                 COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s
+                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/evaluation" -p "test_*.py")
+        set_tests_properties(evaluation_framework PROPERTIES
+                             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
 endif()

@@ -3,9 +3,14 @@
 /build_stage5/
 .cache/
 *.exe
+!evaluation/versions/*/qas.exe
+!evaluation/versions/*/benchmark.exe
 *.obj
 *.o
 *.pdb
 
-local_reports/
+# Generated evaluation runs, temporary worktrees, and archived local artifacts.
+/local_reports/
 benchmarks/fixtures/
+__pycache__/
+*.py[cod]

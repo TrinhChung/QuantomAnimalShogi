@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qas.local/schemas/game.schema.json",
+  "title": "Paired self-play game result",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "game_id", "attempt_id", "pair_id", "opening_id",
+    "candidate_version", "opponent_version", "engine_first", "engine_second",
+    "candidate_result", "terminal_type", "total_actions", "complete", "move_log_path"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_result": {"enum": ["win", "draw", "loss"]},
+    "complete": {"type": "boolean"}
+  },
+  "additionalProperties": true
+}

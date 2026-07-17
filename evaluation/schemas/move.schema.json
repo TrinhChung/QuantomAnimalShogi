@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qas.local/schemas/move.schema.json",
+  "title": "Evaluation move-attempt record",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "game_id", "attempt_id", "pair_id", "opening_id",
+    "engine_version", "engine_binary_sha256", "side", "ply", "state_hash_before",
+    "legal_count", "response_status", "elapsed_wall_ms"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "submitted_action": {"type": ["integer", "null"], "minimum": 0, "maximum": 239},
+    "timeout": {"type": "boolean"}
+  },
+  "additionalProperties": true
+}
