@@ -4,25 +4,52 @@
 #include <array>
 #include <chrono>
 
+#include "core/timing.hpp"
+
 namespace qas {
 namespace {
 
-constexpr int lineage_count = 4;
+constexpr int kLineageCount = static_cast<int>(all_animals.size());
+constexpr int kLineageKeyBitCount = kLineageCount * kLineageCount;
+constexpr std::size_t kLineageTableSize = std::size_t{1} << kLineageKeyBitCount;
+constexpr std::size_t kTurnHashCount = static_cast<std::size_t>(kTurnLimit) + 1;
+constexpr std::size_t kTerminalHashCount = static_cast<std::size_t>(Terminal::Illegal) + 1;
+constexpr std::size_t kWinnerHashCount = kSideCount + 1;
+constexpr std::array<std::uint8_t, physical_piece_count> kInitialPiecePositions{
+    9, 10, 11, 7, 0, 1, 2, 4};
+constexpr std::uint8_t kInitialNorthPieceBits =
+    static_cast<std::uint8_t>(((1U << kPiecesPerOrigin) - 1U) << kPiecesPerOrigin);
 
+/// @brief Converts a board square index to its row.
+/// @param square Zero-based board square.
+/// @return Zero-based row index.
 int row_of(int square) {
     return square / board_width;
 }
+/// @brief Converts a board square index to its column.
+/// @param square Zero-based board square.
+/// @return Zero-based column index.
 int col_of(int square) {
     return square % board_width;
 }
+/// @brief Tests whether board coordinates lie inside the 3-by-4 board.
+/// @param row Candidate row.
+/// @param col Candidate column.
+/// @return `true` for valid board coordinates.
 bool inside(int row, int col) {
     return row >= 0 && row < board_height && col >= 0 && col < board_width;
 }
 
+/// @brief Returns the compact bit assigned to a CH/G/E/L lineage.
+/// @param lineage Zero-based lineage index.
+/// @return Single lineage bit.
 Mask lineage_bit(int lineage) {
     return static_cast<Mask>(1U << static_cast<unsigned>(lineage));
 }
 
+/// @brief Maps animal-form possibilities to CH/G/E/L lineage possibilities.
+/// @param forms Animal-form mask.
+/// @return Four-bit lineage mask.
 Mask lineage_mask(Mask forms) {
     Mask result = 0;
     if ((forms & (bit(Animal::Chick) | bit(Animal::Hen))) != 0) {
@@ -40,6 +67,10 @@ Mask lineage_mask(Mask forms) {
     return result;
 }
 
+/// @brief Retains forms whose lineage remains supported.
+/// @param forms Original animal-form mask.
+/// @param lineages Supported CH/G/E/L lineage mask.
+/// @return Intersection expressed as animal forms.
 Mask forms_for_lineages(Mask forms, Mask lineages) {
     Mask result = 0;
     if ((lineages & lineage_bit(0)) != 0) {
@@ -58,25 +89,67 @@ Mask forms_for_lineages(Mask forms, Mask lineages) {
 }
 
 struct LineagePropagationEntry {
-    std::array<Mask, lineage_count> supported{};
+    std::array<Mask, kLineageCount> supported{};
     bool valid{false};
 };
 
-std::size_t lineage_key(const std::array<Mask, lineage_count>& lineages) {
+using OriginPieceIds = std::array<int, kLineageCount>;
+
+/// @brief Collects the four physical pieces belonging to one immutable origin side.
+/// @param state Source state.
+/// @param origin Origin side to collect.
+/// @param pieces Receives physical piece indices in ascending order.
+/// @return `true` only when exactly four pieces belong to the origin.
+bool collect_origin_pieces(const State& state, Side origin, OriginPieceIds& pieces) {
+    int count = 0;
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (!originated_from(state, piece, origin))
+            continue;
+        if (count >= kLineageCount)
+            return false;
+        pieces[count++] = piece;
+    }
+    return count == kLineageCount;
+}
+
+/// @brief Intersects origin-piece masks with lineage support.
+/// @param state State whose masks are reduced.
+/// @param pieces Four physical pieces of one origin.
+/// @param supported Supported lineage bits for each piece.
+/// @return `false` if any piece loses every possible form.
+bool apply_supported_lineages(State& state,
+                              const OriginPieceIds& pieces,
+                              const std::array<Mask, kLineageCount>& supported) {
+    for (int index = 0; index < kLineageCount; ++index) {
+        const int piece = pieces[index];
+        state.mask[piece] = forms_for_lineages(state.mask[piece], supported[index]);
+        if (state.mask[piece] == 0)
+            return false;
+    }
+    return true;
+}
+
+/// @brief Packs four lineage masks into a lookup-table index.
+/// @param lineages Four four-bit lineage masks.
+/// @return Sixteen-bit table index.
+std::size_t lineage_key(const std::array<Mask, kLineageCount>& lineages) {
     std::size_t key = 0;
-    for (int index = 0; index < lineage_count; ++index) {
-        key |= static_cast<std::size_t>(lineages[index] & 0x0FU)
-               << static_cast<unsigned>(index * 4);
+    for (int index = 0; index < kLineageCount; ++index) {
+        key |= static_cast<std::size_t>(lineages[index] & all_mask)
+               << static_cast<unsigned>(index * kLineageCount);
     }
     return key;
 }
 
-LineagePropagationEntry build_lineage_entry(const std::array<Mask, lineage_count>& lineages) {
+/// @brief Exhaustively computes valid assignment support for one lineage tuple.
+/// @param lineages Candidate lineages for four pieces.
+/// @return Validity and supported lineage bits per piece.
+LineagePropagationEntry build_lineage_entry(const std::array<Mask, kLineageCount>& lineages) {
     LineagePropagationEntry entry;
-    std::array<int, lineage_count> permutation{0, 1, 2, 3};
+    std::array<int, kLineageCount> permutation{0, 1, 2, 3};
     do {
         bool valid = true;
-        for (int index = 0; index < lineage_count; ++index) {
+        for (int index = 0; index < kLineageCount; ++index) {
             if ((lineages[index] & lineage_bit(permutation[index])) == 0) {
                 valid = false;
                 break;
@@ -84,7 +157,7 @@ LineagePropagationEntry build_lineage_entry(const std::array<Mask, lineage_count
         }
         if (valid) {
             entry.valid = true;
-            for (int index = 0; index < lineage_count; ++index) {
+            for (int index = 0; index < kLineageCount; ++index) {
                 entry.supported[index] |= lineage_bit(permutation[index]);
             }
         }
@@ -92,23 +165,31 @@ LineagePropagationEntry build_lineage_entry(const std::array<Mask, lineage_count
     return entry;
 }
 
-std::array<LineagePropagationEntry, 1U << (lineage_count * 4)> build_lineage_table() {
-    std::array<LineagePropagationEntry, 1U << (lineage_count * 4)> table{};
+/// @brief Builds the complete lineage-propagation lookup table.
+/// @return Entry for every packed four-piece lineage tuple.
+std::array<LineagePropagationEntry, kLineageTableSize> build_lineage_table() {
+    std::array<LineagePropagationEntry, kLineageTableSize> table{};
     for (std::size_t key = 0; key < table.size(); ++key) {
-        std::array<Mask, lineage_count> lineages{};
-        for (int index = 0; index < lineage_count; ++index) {
-            lineages[index] = static_cast<Mask>((key >> static_cast<unsigned>(index * 4)) & 0x0FU);
+        std::array<Mask, kLineageCount> lineages{};
+        for (int index = 0; index < kLineageCount; ++index) {
+            lineages[index] =
+                static_cast<Mask>((key >> static_cast<unsigned>(index * kLineageCount)) & all_mask);
         }
         table[key] = build_lineage_entry(lineages);
     }
     return table;
 }
 
-const std::array<LineagePropagationEntry, 1U << (lineage_count * 4)>& lineage_table() {
+/// @brief Returns the immutable lazily initialized lineage lookup table.
+/// @return Process-wide lineage table.
+const std::array<LineagePropagationEntry, kLineageTableSize>& lineage_table() {
     static const auto table = build_lineage_table();
     return table;
 }
 
+/// @brief Advances a deterministic SplitMix64 stream for Zobrist material.
+/// @param seed Mutable generator state.
+/// @return Next pseudo-random 64-bit value.
 std::uint64_t splitmix64(std::uint64_t& seed) {
     std::uint64_t value = (seed += 0x9e3779b97f4a7c15ULL);
     value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
@@ -118,14 +199,15 @@ std::uint64_t splitmix64(std::uint64_t& seed) {
 
 struct ZobristTables {
     std::array<std::array<std::uint64_t, external_source_count>, physical_piece_count> pos{};
-    std::array<std::array<std::uint64_t, 32>, physical_piece_count> mask{};
+    std::array<std::array<std::uint64_t, kAnimalFormMaskCount>, physical_piece_count> mask{};
     std::array<std::uint64_t, physical_piece_count> north_owner{};
     std::array<std::uint64_t, physical_piece_count> north_origin{};
-    std::array<std::uint64_t, 2> side{};
-    std::array<std::uint64_t, 257> turn{};
-    std::array<std::uint64_t, 5> terminal{};
-    std::array<std::uint64_t, 3> winner{};
+    std::array<std::uint64_t, kSideCount> side{};
+    std::array<std::uint64_t, kTurnHashCount> turn{};
+    std::array<std::uint64_t, kTerminalHashCount> terminal{};
+    std::array<std::uint64_t, kWinnerHashCount> winner{};
 
+    /// @brief Deterministically initializes every Zobrist field table.
     ZobristTables() {
         std::uint64_t seed = 0x5141535f5a4f4252ULL;
         for (auto& piece : pos) {
@@ -151,20 +233,23 @@ struct ZobristTables {
     }
 };
 
+/// @brief Returns immutable lazily initialized Zobrist tables.
+/// @return Process-wide Zobrist material.
 const ZobristTables& zobrist_tables() {
     static const ZobristTables tables;
     return tables;
 }
 
+/// @brief Precomputes per-form, quantum-union and move-capability tables.
+/// @return Complete immutable movement table data.
 MoveTables build_move_tables() {
     MoveTables tables;
-    const std::array<Animal, 5> forms = all_forms;
-    for (int side = 0; side < 2; ++side) {
+    for (int side = 0; side < static_cast<int>(kSideCount); ++side) {
         const int forward = side == 0 ? -1 : 1;
         for (int square = 0; square < board_size; ++square) {
             const int row = row_of(square);
             const int col = col_of(square);
-            for (Animal form : forms) {
+            for (Animal form : all_forms) {
                 const int type = static_cast<int>(form);
                 for (int dr = -1; dr <= 1; ++dr) {
                     for (int dc = -1; dc <= 1; ++dc) {
@@ -202,10 +287,10 @@ MoveTables build_move_tables() {
             }
         }
     }
-    for (int mask = 1; mask < 32; ++mask) {
-        for (int side = 0; side < 2; ++side) {
+    for (std::size_t mask = 1; mask < kAnimalFormMaskCount; ++mask) {
+        for (int side = 0; side < static_cast<int>(kSideCount); ++side) {
             for (int square = 0; square < board_size; ++square) {
-                for (Animal form : forms) {
+                for (Animal form : all_forms) {
                     if ((mask & bit(form)) != 0) {
                         tables.quantum_move_table[mask][side][square] |=
                             tables.move_table[static_cast<int>(form)][side][square];
@@ -217,83 +302,68 @@ MoveTables build_move_tables() {
     return tables;
 }
 
+/// @brief Tests whether a square is the promotion/Try rank for a side.
+/// @param square Board square.
+/// @param side Moving side.
+/// @return `true` when the square lies on the opponent-facing back rank.
 bool is_back_rank(int square, Side side) {
     return row_of(square) == (side == Side::South ? 0 : board_height - 1);
 }
 
+/// @brief Propagates one origin group by exhaustive lineage permutations.
+/// @param state State whose masks are reduced.
+/// @param origin Immutable origin group to process.
+/// @return `false` when the origin constraints are contradictory.
 bool propagate_origin_reference(State& state, Side origin) {
-    std::array<int, 4> ids{};
-    int count = 0;
-    for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (originated_from(state, piece, origin)) {
-            if (count >= 4)
-                return false;
-            ids[count++] = piece;
-        }
-    }
-    if (count != 4)
+    OriginPieceIds pieces{};
+    if (!collect_origin_pieces(state, origin, pieces))
         return false;
 
-    std::array<int, 4> permutation{0, 1, 2, 3};
-    std::array<Mask, 4> supported{};
+    std::array<int, kLineageCount> permutation{0, 1, 2, 3};
+    std::array<Mask, kLineageCount> supported{};
     bool found = false;
     do {
         bool valid = true;
-        for (int index = 0; index < 4; ++index) {
-            if ((lineage_mask(state.mask[ids[index]]) & lineage_bit(permutation[index])) == 0) {
+        for (int index = 0; index < kLineageCount; ++index) {
+            if ((lineage_mask(state.mask[pieces[index]]) & lineage_bit(permutation[index])) == 0) {
                 valid = false;
                 break;
             }
         }
         if (valid) {
             found = true;
-            for (int index = 0; index < 4; ++index) {
+            for (int index = 0; index < kLineageCount; ++index) {
                 supported[index] |= lineage_bit(permutation[index]);
             }
         }
     } while (std::next_permutation(permutation.begin(), permutation.end()));
     if (!found)
         return false;
-
-    for (int index = 0; index < 4; ++index) {
-        const int piece = ids[index];
-        state.mask[piece] = forms_for_lineages(state.mask[piece], supported[index]);
-        if (state.mask[piece] == 0)
-            return false;
-    }
-    return true;
+    return apply_supported_lineages(state, pieces, supported);
 }
 
+/// @brief Propagates one origin group through the precomputed lookup table.
+/// @param state State whose masks are reduced.
+/// @param origin Immutable origin group to process.
+/// @return `false` when the origin constraints are contradictory.
 bool propagate_origin_lut(State& state, Side origin) {
-    std::array<int, lineage_count> ids{};
-    int count = 0;
-    for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (originated_from(state, piece, origin)) {
-            if (count >= lineage_count)
-                return false;
-            ids[count++] = piece;
-        }
-    }
-    if (count != lineage_count)
+    OriginPieceIds pieces{};
+    if (!collect_origin_pieces(state, origin, pieces))
         return false;
 
-    std::array<Mask, lineage_count> lineages{};
-    for (int index = 0; index < lineage_count; ++index)
-        lineages[index] = lineage_mask(state.mask[ids[index]]);
+    std::array<Mask, kLineageCount> lineages{};
+    for (int index = 0; index < kLineageCount; ++index)
+        lineages[index] = lineage_mask(state.mask[pieces[index]]);
 
     const auto& entry = lineage_table()[lineage_key(lineages)];
     if (!entry.valid)
         return false;
-
-    for (int index = 0; index < lineage_count; ++index) {
-        const int piece = ids[index];
-        state.mask[piece] = forms_for_lineages(state.mask[piece], entry.supported[index]);
-        if (state.mask[piece] == 0)
-            return false;
-    }
-    return true;
+    return apply_supported_lineages(state, pieces, entry.supported);
 }
 
+/// @brief Verifies board, piece-position and unique hand-slot consistency.
+/// @param state State to inspect.
+/// @return `true` when board and position representations agree.
 bool board_consistent(const State& state) {
     std::array<bool, physical_piece_count> seen{};
     std::array<bool, external_source_count - board_size> hand_seen{};
@@ -351,11 +421,11 @@ const MoveTables& move_tables() {
 
 State initial_state() {
     State state;
-    state.board.fill(-1);
-    state.pos = {9, 10, 11, 7, 0, 1, 2, 4};
+    state.board.fill(kEmptyBoardSquare);
+    state.pos = kInitialPiecePositions;
     state.mask.fill(all_mask);
-    state.owner_bits = 0xF0U;
-    state.origin_bits = 0xF0U;
+    state.owner_bits = kInitialNorthPieceBits;
+    state.origin_bits = kInitialNorthPieceBits;
     state.side_to_move = Side::South;
     for (int piece = 0; piece < physical_piece_count; ++piece) {
         state.board[state.pos[piece]] = static_cast<std::int8_t>(piece);
@@ -384,7 +454,7 @@ bool validate_state(const State& state, std::string* error) {
         else
             ++north_origins;
     }
-    if (south_origins != 4 || north_origins != 4) {
+    if (south_origins != kPiecesPerOrigin || north_origins != kPiecesPerOrigin) {
         return fail("each origin side must have four persistent pieces");
     }
     State copy = state;
@@ -397,6 +467,11 @@ bool validate_state(const State& state, std::string* error) {
 
 namespace {
 
+/// @brief Runs whole-state propagation until no mask changes.
+/// @param state State whose masks are reduced.
+/// @param mode Origin-propagation implementation.
+/// @param iteration_count Optional counter incremented for each fixed-point pass.
+/// @return `false` when masks are invalid or contradictory.
 bool propagate_impl(State& state, PropagationMode mode, std::uint64_t* iteration_count) {
     bool changed = true;
     while (changed) {
@@ -423,10 +498,6 @@ bool propagate_impl(State& state, PropagationMode mode, std::uint64_t* iteration
 
 }  // namespace
 
-bool propagate(State& state) {
-    return propagate(state, PropagationMode::LineageLut);
-}
-
 bool propagate(State& state, PropagationMode mode) {
     return propagate_impl(state, mode, nullptr);
 }
@@ -436,14 +507,14 @@ std::uint64_t zobrist_hash(const State& state) {
     std::uint64_t hash = 0;
     for (int piece = 0; piece < physical_piece_count; ++piece) {
         hash ^= tables.pos[piece][state.pos[piece]];
-        hash ^= tables.mask[piece][state.mask[piece] & 31U];
+        hash ^= tables.mask[piece][state.mask[piece] & all_form_mask];
         if (((state.owner_bits >> piece) & 1U) != 0)
             hash ^= tables.north_owner[piece];
         if (((state.origin_bits >> piece) & 1U) != 0)
             hash ^= tables.north_origin[piece];
     }
     hash ^= tables.side[side_index(state.side_to_move)];
-    hash ^= tables.turn[std::min<std::uint16_t>(state.turn, 256)];
+    hash ^= tables.turn[std::min(state.turn, kTurnLimit)];
     hash ^= tables.terminal[static_cast<std::size_t>(state.terminal)];
     hash ^= tables.winner[static_cast<std::size_t>(state.winner + 1)];
     return hash;
@@ -470,6 +541,10 @@ bool is_square_attacked(const State& state, int square, Side by_side) {
 
 namespace {
 
+/// @brief Finds the lowest unused external hand slot.
+/// @param state Source state.
+/// @param excluded_piece Piece omitted while scanning, typically the captured piece.
+/// @return Hand-slot position, or -1 when every slot is occupied.
 int unused_hand_slot(const State& state, int excluded_piece) {
     std::array<bool, external_source_count - board_size> used{};
     for (int piece = 0; piece < physical_piece_count; ++piece) {
@@ -484,6 +559,10 @@ int unused_hand_slot(const State& state, int excluded_piece) {
     return -1;
 }
 
+/// @brief Counts Lion-capable pieces sharing a target piece's immutable origin.
+/// @param state Source state.
+/// @param target_piece Piece whose origin selects the group.
+/// @return Number of Lion candidates in that origin group.
 int lion_candidates_for_origin(const State& state, int target_piece) {
     const Side origin =
         originated_from(state, target_piece, Side::South) ? Side::South : Side::North;
@@ -498,6 +577,8 @@ int lion_candidates_for_origin(const State& state, int target_piece) {
 
 class ApplyMoveMetricsRecorder {
    public:
+    /// @brief Starts optional whole-transition timing and call accounting.
+    /// @param metrics Optional metrics sink; null disables instrumentation.
     explicit ApplyMoveMetricsRecorder(RuleMetrics* metrics) : metrics_(metrics) {
         if (metrics_ != nullptr) {
             ++metrics_->apply_move_internal_calls;
@@ -505,15 +586,16 @@ class ApplyMoveMetricsRecorder {
         }
     }
 
+    /// @brief Records transition completion and returns the supplied status.
+    /// @param success Whether the transition succeeded.
+    /// @return The unchanged success value.
     bool finish(bool success) {
         if (metrics_ != nullptr) {
             if (success)
                 ++metrics_->apply_move_internal_successes;
             else
                 ++metrics_->apply_move_internal_failures;
-            metrics_->apply_move_internal_ms +=
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
-                    .count();
+            metrics_->apply_move_internal_ms += elapsed_milliseconds(start_);
         }
         return success;
     }
@@ -523,6 +605,10 @@ class ApplyMoveMetricsRecorder {
     std::chrono::steady_clock::time_point start_{};
 };
 
+/// @brief Checks nonmutating terminal, range, ownership and destination preconditions.
+/// @param state Source state.
+/// @param move Candidate move.
+/// @return `true` when mutation may begin.
 bool move_preconditions_hold(const State& state, const Move& move) {
     if (state.terminal != Terminal::None || !move.valid())
         return false;
@@ -533,9 +619,14 @@ bool move_preconditions_hold(const State& state, const Move& move) {
     return state.board[move.to] < 0 || !owned_by(state, state.board[move.to], mover);
 }
 
+/// @brief Applies movement collapse, promotion and source-square removal.
+/// @param state State being transitioned.
+/// @param move Candidate move.
+/// @param mover Side making the move.
+/// @return `false` when the source or collapsed identity is invalid.
 bool apply_move_origin_effects(State& state, const Move& move, Side mover) {
     if (is_hand_position(move.from))
-        return state.board[move.to] == -1;
+        return state.board[move.to] == kEmptyBoardSquare;
 
     const int piece = move.piece;
     if (move.from >= board_size || state.board[move.from] != piece)
@@ -553,6 +644,12 @@ bool apply_move_origin_effects(State& state, const Move& move, Side mover) {
     return true;
 }
 
+/// @brief Transfers and collapses a piece occupying the move destination.
+/// @param state State being transitioned.
+/// @param move Applied move.
+/// @param mover Side taking ownership of a captured piece.
+/// @param catch_win Receives whether the captured piece was the final Lion candidate.
+/// @return `false` only when no hand slot is available for a capture.
 bool capture_destination_piece(State& state, const Move& move, Side mover, bool& catch_win) {
     const int captured = state.board[move.to];
     if (captured < 0)
@@ -581,6 +678,10 @@ bool capture_destination_piece(State& state, const Move& move, Side mover, bool&
     return true;
 }
 
+/// @brief Places the mover, increments the turn and switches side to move.
+/// @param state State being transitioned.
+/// @param move Applied move.
+/// @param mover Side that made the move.
 void complete_board_transition(State& state, const Move& move, Side mover) {
     state.board[move.to] = static_cast<std::int8_t>(move.piece);
     state.pos[move.piece] = move.to;
@@ -588,6 +689,11 @@ void complete_board_transition(State& state, const Move& move, Side mover) {
     state.side_to_move = opposite(mover);
 }
 
+/// @brief Propagates a transitioned state with optional timing metrics.
+/// @param state State whose identity masks are reduced.
+/// @param mode Propagation implementation.
+/// @param metrics Optional metrics sink.
+/// @return `false` when propagation finds a contradiction.
 bool propagate_transition(State& state, PropagationMode mode, RuleMetrics* metrics) {
     if (metrics == nullptr)
         return propagate(state, mode);
@@ -598,11 +704,18 @@ bool propagate_transition(State& state, PropagationMode mode, RuleMetrics* metri
     const auto propagation_end = std::chrono::steady_clock::now();
     ++metrics->propagation_calls;
     metrics->propagation_iterations += propagation_iterations;
-    metrics->propagation_ms +=
-        std::chrono::duration<double, std::milli>(propagation_end - propagation_start).count();
+    metrics->propagation_ms += elapsed_milliseconds(propagation_start, propagation_end);
     return succeeded;
 }
 
+/// @brief Executes the ordered move-transition pipeline.
+/// @param state State to mutate and restore on failure.
+/// @param move Candidate move.
+/// @param undo Receives the complete input state.
+/// @param mode Propagation implementation.
+/// @param detect_try Whether Try terminal detection is enabled.
+/// @param metrics Optional rule metrics sink.
+/// @return `true` when the complete transition succeeds.
 bool apply_move_internal(State& state,
                          const Move& move,
                          Undo& undo,
@@ -610,6 +723,12 @@ bool apply_move_internal(State& state,
                          bool detect_try,
                          RuleMetrics* metrics);
 
+/// @brief Tests whether the side to move has a legal immediate capture of a piece.
+/// @param state Source state.
+/// @param target_piece Physical piece that must be captured.
+/// @param mode Propagation implementation used for replies.
+/// @param metrics Optional metrics sink for reply transitions.
+/// @return `true` when at least one legal reply captures the target.
 bool can_capture_piece_immediately(const State& state,
                                    int target_piece,
                                    PropagationMode mode,
@@ -627,6 +746,14 @@ bool can_capture_piece_immediately(const State& state,
     return false;
 }
 
+/// @brief Applies official Catch, Try and draw terminal priority.
+/// @param state Transitioned and propagated state to update.
+/// @param move Applied move.
+/// @param mover Side that made the move.
+/// @param catch_win Whether capture removed the final Lion candidate.
+/// @param detect_try Whether Try detection is enabled.
+/// @param mode Propagation implementation used for defensive replies.
+/// @param metrics Optional metrics sink for defensive replies.
 void update_terminal_status(State& state,
                             const Move& move,
                             Side mover,
@@ -643,12 +770,15 @@ void update_terminal_status(State& state,
                !can_capture_piece_immediately(state, move.piece, mode, metrics)) {
         state.terminal = Terminal::Try;
         state.winner = static_cast<std::int8_t>(side_index(mover));
-    } else if (state.turn >= 256) {
+    } else if (state.turn >= kTurnLimit) {
         state.terminal = Terminal::Draw;
-        state.winner = -1;
+        state.winner = kNoWinner;
     }
 }
 
+/// @brief Recomputes the transitioned-state hash with optional timing metrics.
+/// @param state State whose stored hash is updated.
+/// @param metrics Optional metrics sink.
 void recompute_transition_hash(State& state, RuleMetrics* metrics) {
     if (metrics == nullptr) {
         recompute_hash(state);
@@ -659,8 +789,7 @@ void recompute_transition_hash(State& state, RuleMetrics* metrics) {
     recompute_hash(state);
     const auto hash_end = std::chrono::steady_clock::now();
     ++metrics->hash_recompute_calls;
-    metrics->hash_recompute_ms +=
-        std::chrono::duration<double, std::milli>(hash_end - hash_begin).count();
+    metrics->hash_recompute_ms += elapsed_milliseconds(hash_begin, hash_end);
 }
 
 bool apply_move_internal(State& state,
@@ -694,18 +823,81 @@ bool apply_move_internal(State& state,
     return metrics_recorder.finish(true);
 }
 
-}  // namespace
+struct LegalMoveGenerationContext {
+    PropagationMode propagation_mode{PropagationMode::LineageLut};
+    RuleMetrics* metrics{nullptr};
+};
 
-bool apply_move(State& state, const Move& move, Undo& undo) {
-    return apply_move(state, move, undo, PropagationMode::LineageLut);
+/// @brief Generates pseudo-legal candidates with optional profiling.
+/// @param state Source state.
+/// @param candidates Buffer cleared and filled with candidates.
+/// @param metrics Optional metrics sink.
+void generate_candidates(const State& state, std::vector<Move>& candidates, RuleMetrics* metrics) {
+    if (metrics == nullptr) {
+        generate_pseudo_legal_moves(state, candidates);
+        return;
+    }
+
+    const auto begin = std::chrono::steady_clock::now();
+    generate_pseudo_legal_moves(state, candidates);
+    const auto end = std::chrono::steady_clock::now();
+    ++metrics->pseudo_move_generation_calls;
+    metrics->pseudo_moves_generated += candidates.size();
+    metrics->pseudo_move_generation_ms += elapsed_milliseconds(begin, end);
 }
+
+/// @brief Filters pseudo-legal candidates through complete transitions.
+/// @param state Source state.
+/// @param legal Buffer cleared and filled with legal moves.
+/// @param candidates Pseudo-legal candidates to test.
+/// @param context Propagation and optional instrumentation context.
+void filter_legal_candidates(const State& state,
+                             std::vector<Move>& legal,
+                             const std::vector<Move>& candidates,
+                             const LegalMoveGenerationContext& context) {
+    std::chrono::steady_clock::time_point begin{};
+    if (context.metrics != nullptr)
+        begin = std::chrono::steady_clock::now();
+
+    legal.clear();
+    legal.reserve(candidates.size());
+    State copy = state;
+    for (const Move& move : candidates) {
+        Undo undo;
+        if (apply_move_internal(
+                copy, move, undo, context.propagation_mode, true, context.metrics)) {
+            legal.push_back(move);
+        } else if (context.metrics != nullptr) {
+            ++context.metrics->pseudo_moves_rejected;
+        }
+        copy = state;
+    }
+
+    if (context.metrics != nullptr) {
+        const auto end = std::chrono::steady_clock::now();
+        ++context.metrics->legal_filter_calls;
+        context.metrics->legal_moves_generated += legal.size();
+        context.metrics->legal_filter_ms += elapsed_milliseconds(begin, end);
+    }
+}
+
+/// @brief Runs the shared candidate-generation and legal-filter pipeline.
+/// @param state Source state.
+/// @param legal Buffer receiving legal moves.
+/// @param candidates Reusable pseudo-legal candidate buffer.
+/// @param context Propagation and optional instrumentation context.
+void generate_legal_moves_impl(const State& state,
+                               std::vector<Move>& legal,
+                               std::vector<Move>& candidates,
+                               const LegalMoveGenerationContext& context) {
+    generate_candidates(state, candidates, context.metrics);
+    filter_legal_candidates(state, legal, candidates, context);
+}
+
+}  // namespace
 
 bool apply_move(State& state, const Move& move, Undo& undo, PropagationMode mode) {
     return apply_move_internal(state, move, undo, mode, true, nullptr);
-}
-
-bool apply_move_profiled(State& state, const Move& move, Undo& undo, RuleMetrics& metrics) {
-    return apply_move_profiled(state, move, undo, metrics, PropagationMode::LineageLut);
 }
 
 bool apply_move_profiled(
@@ -729,7 +921,7 @@ void generate_pseudo_legal_moves(const State& state, std::vector<Move>& moves) {
         const int from = state.pos[piece];
         if (is_hand_position(static_cast<std::uint8_t>(from))) {
             for (int to = 0; to < board_size; ++to) {
-                if (state.board[to] == -1) {
+                if (state.board[to] == kEmptyBoardSquare) {
                     moves.push_back(Move{static_cast<std::uint8_t>(piece),
                                          static_cast<std::uint8_t>(from),
                                          static_cast<std::uint8_t>(to)});
@@ -754,42 +946,23 @@ void generate_pseudo_legal_moves(const State& state, std::vector<Move>& moves) {
 
 std::vector<Move> generate_pseudo_legal_moves(const State& state) {
     std::vector<Move> moves;
-    moves.reserve(128);
+    moves.reserve(kMoveBufferCapacity);
     generate_pseudo_legal_moves(state, moves);
     return moves;
 }
 
 void generate_legal_moves(const State& state,
                           std::vector<Move>& legal,
-                          std::vector<Move>& candidates) {
-    generate_legal_moves(state, legal, candidates, PropagationMode::LineageLut);
-}
-
-void generate_legal_moves(const State& state,
-                          std::vector<Move>& legal,
                           std::vector<Move>& candidates,
                           PropagationMode mode) {
-    generate_pseudo_legal_moves(state, candidates);
-    legal.clear();
-    legal.reserve(candidates.size());
-    State copy = state;
-    for (const Move& move : candidates) {
-        Undo undo;
-        if (apply_move(copy, move, undo, mode))
-            legal.push_back(move);
-        copy = state;
-    }
-}
-
-std::vector<Move> generate_legal_moves(const State& state) {
-    return generate_legal_moves(state, PropagationMode::LineageLut);
+    generate_legal_moves_impl(state, legal, candidates, LegalMoveGenerationContext{mode, nullptr});
 }
 
 std::vector<Move> generate_legal_moves(const State& state, PropagationMode mode) {
     std::vector<Move> candidates;
     std::vector<Move> legal;
-    candidates.reserve(128);
-    legal.reserve(128);
+    candidates.reserve(kMoveBufferCapacity);
+    legal.reserve(kMoveBufferCapacity);
     generate_legal_moves(state, legal, candidates, mode);
     return legal;
 }
@@ -797,41 +970,9 @@ std::vector<Move> generate_legal_moves(const State& state, PropagationMode mode)
 void generate_legal_moves_profiled(const State& state,
                                    std::vector<Move>& legal,
                                    std::vector<Move>& candidates,
-                                   RuleMetrics& metrics) {
-    generate_legal_moves_profiled(state, legal, candidates, metrics, PropagationMode::LineageLut);
-}
-
-void generate_legal_moves_profiled(const State& state,
-                                   std::vector<Move>& legal,
-                                   std::vector<Move>& candidates,
                                    RuleMetrics& metrics,
                                    PropagationMode mode) {
-    const auto pseudo_begin = std::chrono::steady_clock::now();
-    generate_pseudo_legal_moves(state, candidates);
-    const auto pseudo_end = std::chrono::steady_clock::now();
-    ++metrics.pseudo_move_generation_calls;
-    metrics.pseudo_moves_generated += candidates.size();
-    metrics.pseudo_move_generation_ms +=
-        std::chrono::duration<double, std::milli>(pseudo_end - pseudo_begin).count();
-
-    const auto filter_begin = std::chrono::steady_clock::now();
-    legal.clear();
-    legal.reserve(candidates.size());
-    State copy = state;
-    for (const Move& move : candidates) {
-        Undo undo;
-        if (apply_move_profiled(copy, move, undo, metrics, mode)) {
-            legal.push_back(move);
-        } else {
-            ++metrics.pseudo_moves_rejected;
-        }
-        copy = state;
-    }
-    const auto filter_end = std::chrono::steady_clock::now();
-    ++metrics.legal_filter_calls;
-    metrics.legal_moves_generated += legal.size();
-    metrics.legal_filter_ms +=
-        std::chrono::duration<double, std::milli>(filter_end - filter_begin).count();
+    generate_legal_moves_impl(state, legal, candidates, LegalMoveGenerationContext{mode, &metrics});
 }
 
 bool is_immediate_winning_move(const State& state, const Move& move) {

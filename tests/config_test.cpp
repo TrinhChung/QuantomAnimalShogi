@@ -1,6 +1,8 @@
 #include "core/config.hpp"
 
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -13,6 +15,39 @@ void check(bool condition, const std::string& message) {
         std::cerr << "FAIL: " << message << '\n';
         ++failures;
     }
+}
+
+void test_json_overrides_each_config_section() {
+    const std::string path = "qas_config_test_override.json";
+    {
+        std::ofstream output(path);
+        output << R"({
+            "max_depth": 11,
+            "l_eq_min_duplicate_ratio": 0.5,
+            "tt_move_ordering_enabled": false,
+            "tt_size_mb": 32,
+            "tt_entry_replace_policy": "always",
+            "reserve_memory_mb": 64,
+            "benchmark_repeat_count": 3,
+            "log_file_path": "test.csv",
+            "competition_mode": false
+        })";
+    }
+
+    const qas::EngineConfig config = qas::load_engine_config(path, "contest_safe");
+    std::remove(path.c_str());
+
+    check(config.search.max_depth == 11 && config.search.l_eq_min_duplicate_ratio == 0.5,
+          "JSON overrides search configuration");
+    check(!config.move_ordering.tt_move_ordering_enabled,
+          "JSON overrides move-ordering configuration");
+    check(config.tt.size_mb == 32 && config.tt.entry_replace_policy == "always",
+          "JSON overrides transposition-table configuration");
+    check(config.memory.reserve_memory_mb == 64, "JSON overrides memory configuration");
+    check(config.instrumentation.benchmark_repeat_count == 3 &&
+              config.instrumentation.log_file_path == "test.csv",
+          "JSON overrides instrumentation configuration");
+    check(!config.safety.competition_mode, "JSON overrides safety configuration");
 }
 }  // namespace
 
@@ -38,6 +73,8 @@ int main() {
               high.memory.reserve_memory_mb >= 1024,
           "contest_high_ram keeps a large reserve");
     check(!low.tt.auto_size_enabled && low.tt.size_mb <= 256, "low_ram has a bounded fixed TT");
+
+    test_json_overrides_each_config_section();
 
     qas::EngineConfig fixed = low;
     fixed.tt.size_mb = 128;

@@ -20,11 +20,22 @@
 namespace qas {
 namespace {
 
-bool read_bool(const std::string& json, const std::string& key, bool fallback) {
+/// @brief Finds the value separator associated with a flat JSON key lookup.
+/// @param json JSON text to scan.
+/// @param key Property name without quotes.
+/// @return Colon position, or `std::string::npos` when the key or separator is absent.
+std::size_t find_json_value_separator(const std::string& json, const std::string& key) {
     const auto position = json.find('"' + key + '"');
-    if (position == std::string::npos)
-        return fallback;
-    const auto colon = json.find(':', position);
+    return position == std::string::npos ? std::string::npos : json.find(':', position);
+}
+
+/// @brief Reads a Boolean property with fallback semantics.
+/// @param json JSON text to scan.
+/// @param key Property name.
+/// @param fallback Value returned for missing or malformed input.
+/// @return Parsed Boolean or fallback.
+bool read_bool(const std::string& json, const std::string& key, bool fallback) {
+    const auto colon = find_json_value_separator(json, key);
     if (colon == std::string::npos)
         return fallback;
     const auto value = json.find_first_not_of(" \t\r\n", colon + 1);
@@ -37,11 +48,13 @@ bool read_bool(const std::string& json, const std::string& key, bool fallback) {
     return fallback;
 }
 
+/// @brief Reads a numeric property with fallback semantics.
+/// @param json JSON text to scan.
+/// @param key Property name.
+/// @param fallback Value returned for missing or malformed input.
+/// @return Parsed number or fallback.
 double read_number(const std::string& json, const std::string& key, double fallback) {
-    const auto position = json.find('"' + key + '"');
-    if (position == std::string::npos)
-        return fallback;
-    const auto colon = json.find(':', position);
+    const auto colon = find_json_value_separator(json, key);
     if (colon == std::string::npos)
         return fallback;
     const auto begin = json.find_first_of("-0123456789", colon + 1);
@@ -58,26 +71,39 @@ double read_number(const std::string& json, const std::string& key, double fallb
     }
 }
 
+/// @brief Reads a quoted string property with fallback semantics.
+/// @param json JSON text to scan.
+/// @param key Property name.
+/// @param fallback Value returned for missing or malformed input.
+/// @return Parsed string or fallback.
 std::string read_string(const std::string& json,
                         const std::string& key,
                         const std::string& fallback) {
-    const auto position = json.find('"' + key + '"');
-    if (position == std::string::npos)
+    const auto colon = find_json_value_separator(json, key);
+    if (colon == std::string::npos)
         return fallback;
-    const auto colon = json.find(':', position);
     const auto quote = json.find('"', colon + 1);
     const auto end = json.find('"', quote + 1);
-    if (colon == std::string::npos || quote == std::string::npos || end == std::string::npos) {
+    if (quote == std::string::npos || end == std::string::npos) {
         return fallback;
     }
     return json.substr(quote + 1, end - quote - 1);
 }
 
+/// @brief Reads a numeric property and converts it to the destination type.
+/// @tparam T Numeric destination type.
+/// @param json JSON text to scan.
+/// @param key Property name.
+/// @param fallback Value returned for missing or malformed input.
+/// @return Parsed and converted value or fallback.
 template <typename T>
 T number(const std::string& json, const std::string& key, T fallback) {
     return static_cast<T>(read_number(json, key, static_cast<double>(fallback)));
 }
 
+/// @brief Rounds a nonnegative size down to a power of two.
+/// @param value Upper bound to round.
+/// @return Greatest power of two not exceeding value, or zero for zero.
 std::size_t floor_power_of_two(std::size_t value) {
     if (value == 0)
         return 0;
@@ -87,100 +113,139 @@ std::size_t floor_power_of_two(std::size_t value) {
     return result;
 }
 
-void apply_json(EngineConfig& c, const std::string& j) {
-    c.search.max_depth = number(j, "max_depth", c.search.max_depth);
-    c.search.soft_time_limit_ms = number(j, "soft_time_limit_ms", c.search.soft_time_limit_ms);
-    c.search.hard_time_limit_ms = number(j, "hard_time_limit_ms", c.search.hard_time_limit_ms);
-    c.search.iterative_deepening_enabled =
-        read_bool(j, "iterative_deepening_enabled", c.search.iterative_deepening_enabled);
-    c.search.pvs_enabled = read_bool(j, "pvs_enabled", c.search.pvs_enabled);
-    c.search.aspiration_enabled = read_bool(j, "aspiration_enabled", c.search.aspiration_enabled);
-    c.search.aspiration_initial_window =
-        number(j, "aspiration_initial_window", c.search.aspiration_initial_window);
-    c.search.aspiration_max_retries =
-        number(j, "aspiration_max_retries", c.search.aspiration_max_retries);
-    c.search.l_eq_enabled = read_bool(j, "l_eq_enabled", c.search.l_eq_enabled);
-    c.search.l_eq_trigger_enabled =
-        read_bool(j, "l_eq_trigger_enabled", c.search.l_eq_trigger_enabled);
-    c.search.l_eq_min_depth_remaining =
-        number(j, "l_eq_min_depth_remaining", c.search.l_eq_min_depth_remaining);
-    c.search.l_eq_min_legal_count =
-        number(j, "l_eq_min_legal_count", c.search.l_eq_min_legal_count);
-    c.search.l_eq_min_duplicate_ratio =
-        read_number(j, "l_eq_min_duplicate_ratio", c.search.l_eq_min_duplicate_ratio);
-    c.search.l_eq_require_duplicate_hand_hint =
-        read_bool(j, "l_eq_require_duplicate_hand_hint", c.search.l_eq_require_duplicate_hand_hint);
-    c.move_ordering.tt_move_ordering_enabled =
-        read_bool(j, "tt_move_ordering_enabled", c.move_ordering.tt_move_ordering_enabled);
-    c.move_ordering.immediate_win_ordering_enabled = read_bool(
-        j, "immediate_win_ordering_enabled", c.move_ordering.immediate_win_ordering_enabled);
-    c.move_ordering.prevent_loss_ordering_enabled = read_bool(
-        j, "prevent_loss_ordering_enabled", c.move_ordering.prevent_loss_ordering_enabled);
-    c.move_ordering.capture_ordering_enabled =
-        read_bool(j, "capture_ordering_enabled", c.move_ordering.capture_ordering_enabled);
-    c.move_ordering.lion_reduction_ordering_enabled = read_bool(
-        j, "lion_reduction_ordering_enabled", c.move_ordering.lion_reduction_ordering_enabled);
-    c.move_ordering.try_threat_ordering_enabled =
-        read_bool(j, "try_threat_ordering_enabled", c.move_ordering.try_threat_ordering_enabled);
-    c.move_ordering.mask_collapse_ordering_enabled = read_bool(
-        j, "mask_collapse_ordering_enabled", c.move_ordering.mask_collapse_ordering_enabled);
-    c.move_ordering.killer_enabled = read_bool(j, "killer_enabled", c.move_ordering.killer_enabled);
-    c.move_ordering.history_enabled =
-        read_bool(j, "history_enabled", c.move_ordering.history_enabled);
-    c.move_ordering.history_decay_interval =
-        number(j, "history_decay_interval", c.move_ordering.history_decay_interval);
-    c.tt.enabled = read_bool(j, "tt_enabled", c.tt.enabled);
-    c.tt.size_mb = number(j, "tt_size_mb", c.tt.size_mb);
-    c.tt.max_size_mb = number(j, "tt_max_size_mb", c.tt.max_size_mb);
-    c.tt.auto_size_enabled = read_bool(j, "tt_auto_size_enabled", c.tt.auto_size_enabled);
-    c.tt.max_memory_ratio = read_number(j, "tt_max_memory_ratio", c.tt.max_memory_ratio);
-    c.tt.entry_replace_policy =
-        read_string(j, "tt_entry_replace_policy", c.tt.entry_replace_policy);
-    c.tt.clear_each_move = read_bool(j, "tt_clear_each_move", c.tt.clear_each_move);
-    c.tt.age_enabled = read_bool(j, "tt_age_enabled", c.tt.age_enabled);
-    c.memory.profile_enabled = read_bool(j, "memory_profile_enabled", c.memory.profile_enabled);
-    c.memory.max_total_memory_mb = number(j, "max_total_memory_mb", c.memory.max_total_memory_mb);
-    c.memory.reserve_memory_mb = number(j, "reserve_memory_mb", c.memory.reserve_memory_mb);
-    c.memory.generation_cache_enabled =
-        read_bool(j, "generation_cache_enabled", c.memory.generation_cache_enabled);
-    c.memory.generation_cache_size_mb =
-        number(j, "generation_cache_size_mb", c.memory.generation_cache_size_mb);
-    c.memory.l_eq_cache_enabled = read_bool(j, "l_eq_cache_enabled", c.memory.l_eq_cache_enabled);
-    c.memory.l_eq_cache_size_mb = number(j, "l_eq_cache_size_mb", c.memory.l_eq_cache_size_mb);
-    c.memory.use_memory_pool = read_bool(j, "use_memory_pool", c.memory.use_memory_pool);
-    c.memory.move_list_pool_enabled =
-        read_bool(j, "move_list_pool_enabled", c.memory.move_list_pool_enabled);
-    c.instrumentation.debug_counters_enabled =
-        read_bool(j, "debug_counters_enabled", c.instrumentation.debug_counters_enabled);
-    c.instrumentation.resource_estimation_enabled =
-        read_bool(j, "resource_estimation_enabled", c.instrumentation.resource_estimation_enabled);
-    c.instrumentation.benchmark_mode_enabled =
-        read_bool(j, "benchmark_mode_enabled", c.instrumentation.benchmark_mode_enabled);
-    c.instrumentation.per_depth_log_enabled =
-        read_bool(j, "per_depth_log_enabled", c.instrumentation.per_depth_log_enabled);
-    c.instrumentation.csv_log_enabled =
-        read_bool(j, "csv_log_enabled", c.instrumentation.csv_log_enabled);
-    c.instrumentation.stderr_log_enabled =
-        read_bool(j, "stderr_log_enabled", c.instrumentation.stderr_log_enabled);
-    c.instrumentation.tt_matrix_enabled =
-        read_bool(j, "tt_matrix_enabled", c.instrumentation.tt_matrix_enabled);
-    c.instrumentation.benchmark_repeat_count =
-        number(j, "benchmark_repeat_count", c.instrumentation.benchmark_repeat_count);
-    c.instrumentation.log_file_path =
-        read_string(j, "log_file_path", c.instrumentation.log_file_path);
-    c.safety.competition_mode = read_bool(j, "competition_mode", c.safety.competition_mode);
-    c.safety.disable_expensive_asserts =
-        read_bool(j, "disable_expensive_asserts", c.safety.disable_expensive_asserts);
-    c.safety.disable_resource_estimation_during_search =
-        read_bool(j,
+/// @brief Applies JSON overrides owned by SearchConfig.
+/// @param config Search configuration to mutate.
+/// @param json JSON override text.
+void apply_search_json(SearchConfig& config, const std::string& json) {
+    config.max_depth = number(json, "max_depth", config.max_depth);
+    config.soft_time_limit_ms = number(json, "soft_time_limit_ms", config.soft_time_limit_ms);
+    config.hard_time_limit_ms = number(json, "hard_time_limit_ms", config.hard_time_limit_ms);
+    config.iterative_deepening_enabled =
+        read_bool(json, "iterative_deepening_enabled", config.iterative_deepening_enabled);
+    config.pvs_enabled = read_bool(json, "pvs_enabled", config.pvs_enabled);
+    config.aspiration_enabled = read_bool(json, "aspiration_enabled", config.aspiration_enabled);
+    config.aspiration_initial_window =
+        number(json, "aspiration_initial_window", config.aspiration_initial_window);
+    config.aspiration_max_retries =
+        number(json, "aspiration_max_retries", config.aspiration_max_retries);
+    config.l_eq_enabled = read_bool(json, "l_eq_enabled", config.l_eq_enabled);
+    config.l_eq_trigger_enabled =
+        read_bool(json, "l_eq_trigger_enabled", config.l_eq_trigger_enabled);
+    config.l_eq_min_depth_remaining =
+        number(json, "l_eq_min_depth_remaining", config.l_eq_min_depth_remaining);
+    config.l_eq_min_legal_count = number(json, "l_eq_min_legal_count", config.l_eq_min_legal_count);
+    config.l_eq_min_duplicate_ratio =
+        read_number(json, "l_eq_min_duplicate_ratio", config.l_eq_min_duplicate_ratio);
+    config.l_eq_require_duplicate_hand_hint = read_bool(
+        json, "l_eq_require_duplicate_hand_hint", config.l_eq_require_duplicate_hand_hint);
+}
+
+/// @brief Applies JSON overrides owned by MoveOrderingConfig.
+/// @param config Move-ordering configuration to mutate.
+/// @param json JSON override text.
+void apply_move_ordering_json(MoveOrderingConfig& config, const std::string& json) {
+    config.tt_move_ordering_enabled =
+        read_bool(json, "tt_move_ordering_enabled", config.tt_move_ordering_enabled);
+    config.immediate_win_ordering_enabled =
+        read_bool(json, "immediate_win_ordering_enabled", config.immediate_win_ordering_enabled);
+    config.prevent_loss_ordering_enabled =
+        read_bool(json, "prevent_loss_ordering_enabled", config.prevent_loss_ordering_enabled);
+    config.capture_ordering_enabled =
+        read_bool(json, "capture_ordering_enabled", config.capture_ordering_enabled);
+    config.lion_reduction_ordering_enabled =
+        read_bool(json, "lion_reduction_ordering_enabled", config.lion_reduction_ordering_enabled);
+    config.try_threat_ordering_enabled =
+        read_bool(json, "try_threat_ordering_enabled", config.try_threat_ordering_enabled);
+    config.mask_collapse_ordering_enabled =
+        read_bool(json, "mask_collapse_ordering_enabled", config.mask_collapse_ordering_enabled);
+    config.killer_enabled = read_bool(json, "killer_enabled", config.killer_enabled);
+    config.history_enabled = read_bool(json, "history_enabled", config.history_enabled);
+    config.history_decay_interval =
+        number(json, "history_decay_interval", config.history_decay_interval);
+}
+
+/// @brief Applies JSON overrides owned by TranspositionConfig.
+/// @param config Transposition-table configuration to mutate.
+/// @param json JSON override text.
+void apply_transposition_json(TranspositionConfig& config, const std::string& json) {
+    config.enabled = read_bool(json, "tt_enabled", config.enabled);
+    config.size_mb = number(json, "tt_size_mb", config.size_mb);
+    config.max_size_mb = number(json, "tt_max_size_mb", config.max_size_mb);
+    config.auto_size_enabled = read_bool(json, "tt_auto_size_enabled", config.auto_size_enabled);
+    config.max_memory_ratio = read_number(json, "tt_max_memory_ratio", config.max_memory_ratio);
+    config.entry_replace_policy =
+        read_string(json, "tt_entry_replace_policy", config.entry_replace_policy);
+    config.clear_each_move = read_bool(json, "tt_clear_each_move", config.clear_each_move);
+    config.age_enabled = read_bool(json, "tt_age_enabled", config.age_enabled);
+}
+
+/// @brief Applies JSON overrides owned by MemoryConfig.
+/// @param config Memory configuration to mutate.
+/// @param json JSON override text.
+void apply_memory_json(MemoryConfig& config, const std::string& json) {
+    config.profile_enabled = read_bool(json, "memory_profile_enabled", config.profile_enabled);
+    config.max_total_memory_mb = number(json, "max_total_memory_mb", config.max_total_memory_mb);
+    config.reserve_memory_mb = number(json, "reserve_memory_mb", config.reserve_memory_mb);
+    config.generation_cache_enabled =
+        read_bool(json, "generation_cache_enabled", config.generation_cache_enabled);
+    config.generation_cache_size_mb =
+        number(json, "generation_cache_size_mb", config.generation_cache_size_mb);
+    config.l_eq_cache_enabled = read_bool(json, "l_eq_cache_enabled", config.l_eq_cache_enabled);
+    config.l_eq_cache_size_mb = number(json, "l_eq_cache_size_mb", config.l_eq_cache_size_mb);
+    config.use_memory_pool = read_bool(json, "use_memory_pool", config.use_memory_pool);
+    config.move_list_pool_enabled =
+        read_bool(json, "move_list_pool_enabled", config.move_list_pool_enabled);
+}
+
+/// @brief Applies JSON overrides owned by InstrumentationConfig.
+/// @param config Instrumentation configuration to mutate.
+/// @param json JSON override text.
+void apply_instrumentation_json(InstrumentationConfig& config, const std::string& json) {
+    config.debug_counters_enabled =
+        read_bool(json, "debug_counters_enabled", config.debug_counters_enabled);
+    config.resource_estimation_enabled =
+        read_bool(json, "resource_estimation_enabled", config.resource_estimation_enabled);
+    config.benchmark_mode_enabled =
+        read_bool(json, "benchmark_mode_enabled", config.benchmark_mode_enabled);
+    config.per_depth_log_enabled =
+        read_bool(json, "per_depth_log_enabled", config.per_depth_log_enabled);
+    config.csv_log_enabled = read_bool(json, "csv_log_enabled", config.csv_log_enabled);
+    config.stderr_log_enabled = read_bool(json, "stderr_log_enabled", config.stderr_log_enabled);
+    config.tt_matrix_enabled = read_bool(json, "tt_matrix_enabled", config.tt_matrix_enabled);
+    config.benchmark_repeat_count =
+        number(json, "benchmark_repeat_count", config.benchmark_repeat_count);
+    config.log_file_path = read_string(json, "log_file_path", config.log_file_path);
+}
+
+/// @brief Applies JSON overrides owned by SafetyConfig.
+/// @param config Safety configuration to mutate.
+/// @param json JSON override text.
+void apply_safety_json(SafetyConfig& config, const std::string& json) {
+    config.competition_mode = read_bool(json, "competition_mode", config.competition_mode);
+    config.disable_expensive_asserts =
+        read_bool(json, "disable_expensive_asserts", config.disable_expensive_asserts);
+    config.disable_resource_estimation_during_search =
+        read_bool(json,
                   "disable_resource_estimation_during_search",
-                  c.safety.disable_resource_estimation_during_search);
-    c.safety.disable_l_eq_when_low_time =
-        read_bool(j, "disable_l_eq_when_low_time", c.safety.disable_l_eq_when_low_time);
-    c.safety.emergency_depth_fallback =
-        read_bool(j, "emergency_depth_fallback", c.safety.emergency_depth_fallback);
-    c.safety.safe_fallback_move_enabled =
-        read_bool(j, "safe_fallback_move_enabled", c.safety.safe_fallback_move_enabled);
+                  config.disable_resource_estimation_during_search);
+    config.disable_l_eq_when_low_time =
+        read_bool(json, "disable_l_eq_when_low_time", config.disable_l_eq_when_low_time);
+    config.emergency_depth_fallback =
+        read_bool(json, "emergency_depth_fallback", config.emergency_depth_fallback);
+    config.safe_fallback_move_enabled =
+        read_bool(json, "safe_fallback_move_enabled", config.safe_fallback_move_enabled);
+}
+
+/// @brief Dispatches JSON overrides to every configuration owner.
+/// @param config Complete engine configuration to mutate.
+/// @param json JSON override text.
+void apply_json(EngineConfig& config, const std::string& json) {
+    apply_search_json(config.search, json);
+    apply_move_ordering_json(config.move_ordering, json);
+    apply_transposition_json(config.tt, json);
+    apply_memory_json(config.memory, json);
+    apply_instrumentation_json(config.instrumentation, json);
+    apply_safety_json(config.safety, json);
 }
 
 }  // namespace
@@ -216,7 +281,7 @@ EngineConfig profile_config(const std::string& profile) {
     } else if (profile == "low_ram") {
         c.tt.size_mb = 128;
         c.tt.auto_size_enabled = false;
-        c.tt.max_size_mb = 128;
+        c.tt.max_size_mb = c.tt.size_mb;
         c.memory.max_total_memory_mb = 512;
         c.memory.reserve_memory_mb = 128;
         c.instrumentation.debug_counters_enabled = false;

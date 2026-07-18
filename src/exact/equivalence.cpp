@@ -4,17 +4,40 @@
 #include <chrono>
 #include <tuple>
 
+#include "core/timing.hpp"
+
 namespace qas {
 namespace {
 
+constexpr unsigned kCanonicalPositionBitCount = 5;
+constexpr unsigned kCanonicalOwnerShift = kCanonicalPositionBitCount;
+constexpr unsigned kCanonicalMaskShift = kCanonicalOwnerShift + 1;
+constexpr unsigned kBoardOriginShift = 1;
+constexpr unsigned kBoardOwnerShift = kBoardOriginShift + 1;
+constexpr unsigned kBoardMaskShift = kBoardOwnerShift + 1;
+constexpr std::uint8_t kOccupiedSquareBit = 1U;
+
+static_assert(external_source_count <= (1U << kCanonicalPositionBitCount),
+              "canonical position field is too narrow");
+
+/// @brief Encodes canonical position, owner and mask fields for one physical piece.
+/// @param state Source state.
+/// @param piece Physical piece index.
+/// @return Compact sortable tuple with canonicalized hand position.
 std::uint16_t piece_tuple(const State& state, int piece) {
     const unsigned canonical_position =
         is_hand_position(state.pos[piece]) ? first_hand_slot : state.pos[piece];
-    return static_cast<std::uint16_t>(canonical_position |
-                                      (owned_by(state, piece, Side::North) ? 1U << 5U : 0U) |
-                                      (static_cast<unsigned>(state.mask[piece]) << 6U));
+    return static_cast<std::uint16_t>(
+        canonical_position |
+        (owned_by(state, piece, Side::North) ? 1U << kCanonicalOwnerShift : 0U) |
+        (static_cast<unsigned>(state.mask[piece]) << kCanonicalMaskShift));
 }
 
+/// @brief Ranks equivalent moves when selecting a class representative.
+/// @param state Source state.
+/// @param move Candidate representative.
+/// @param preferred Caller-preferred move.
+/// @return Higher-is-preferred deterministic score.
 int representative_score(const State& state, const Move& move, const Move& preferred) {
     if (move == preferred)
         return 2'000'000;
@@ -28,10 +51,16 @@ int representative_score(const State& state, const Move& move, const Move& prefe
     return score - (static_cast<int>(move.from) * board_size + move.to);
 }
 
+/// @brief Mixes one canonical field into an accumulated hash.
+/// @param seed Hash accumulator to mutate.
+/// @param value Field value to mix.
 void hash_combine(std::size_t& seed, std::uint64_t value) {
     seed ^= static_cast<std::size_t>(value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U));
 }
 
+/// @brief Detects interchangeable hand pieces that may yield duplicate drops.
+/// @param state Source state.
+/// @return `true` when two movable hand pieces share owner, origin and mask.
 bool has_duplicate_drop_hint(const State& state) {
     for (int left = 0; left < physical_piece_count; ++left) {
         if (!is_hand_position(state.pos[left]) || !owned_by(state, left, state.side_to_move))
@@ -48,6 +77,19 @@ bool has_duplicate_drop_hint(const State& state) {
     return false;
 }
 
+/// @brief Applies configured gates and retains one move per equivalent successor class.
+/// @param state Source state.
+/// @param legal_moves Legal moves before reduction.
+/// @param preferred Preferred representative move.
+/// @param threshold Minimum raw branching threshold.
+/// @param min_depth Minimum remaining depth for reduction.
+/// @param depth_remaining Current remaining search depth.
+/// @param minimum_duplicate_ratio Minimum observed reduction ratio.
+/// @param require_hint Whether a duplicate-hand hint is mandatory.
+/// @param low_time Whether the caller is in low-time mode.
+/// @param applied Receives whether reduction passed all gates.
+/// @param stats Optional reduction metrics sink.
+/// @return Reduced representatives, or the original legal moves when gated off.
 std::vector<Move> reduce_successors(const State& state,
                                     const std::vector<Move>& legal_moves,
                                     const Move& preferred,
@@ -109,12 +151,13 @@ CanonKey canonical_key(const State& state) {
             continue;
         const unsigned origin = originated_from(state, piece, Side::North) ? 1U : 0U;
         const unsigned owner = owned_by(state, piece, Side::North) ? 1U : 0U;
-        key.board[square] = static_cast<std::uint8_t>(1U | (origin << 1U) | (owner << 2U) |
-                                                      (state.mask[piece] << 3U));
+        key.board[square] = static_cast<std::uint8_t>(
+            kOccupiedSquareBit | (origin << kBoardOriginShift) | (owner << kBoardOwnerShift) |
+            (state.mask[piece] << kBoardMaskShift));
     }
 
-    for (int origin = 0; origin < 2; ++origin) {
-        std::array<std::uint16_t, 4> tuples{};
+    for (int origin = 0; origin < static_cast<int>(kSideCount); ++origin) {
+        std::array<std::uint16_t, kPiecesPerOrigin> tuples{};
         int count = 0;
         const Side side = origin == 0 ? Side::South : Side::North;
         for (int piece = 0; piece < physical_piece_count; ++piece) {
@@ -122,7 +165,7 @@ CanonKey canonical_key(const State& state) {
                 tuples[count++] = piece_tuple(state, piece);
         }
         std::sort(tuples.begin(), tuples.end());
-        std::copy(tuples.begin(), tuples.end(), key.pieces.begin() + origin * 4);
+        std::copy(tuples.begin(), tuples.end(), key.pieces.begin() + origin * kPiecesPerOrigin);
     }
     key.side_to_move = state.side_to_move;
     key.turn = state.turn;
@@ -157,8 +200,7 @@ std::vector<SuccessorClass> generate_equivalent_successor_classes(
             key = canonical_key(successor);
             const auto end = std::chrono::steady_clock::now();
             ++stats->canonicalize_calls;
-            stats->canonicalize_ms +=
-                std::chrono::duration<double, std::milli>(end - begin).count();
+            stats->canonicalize_ms += elapsed_milliseconds(begin, end);
         } else {
             key = canonical_key(successor);
         }

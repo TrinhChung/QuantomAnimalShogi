@@ -98,16 +98,46 @@ The debug state format starts with `side turn`, followed by eight lines:
 - Exact fixed-point lineage quotas `CH/G/E/L`, one per origin side.
 - Draw exactly at turn 256; turn is part of Zobrist and canonical keys.
 
-## Source layout
+## Project structure
 
-- `include/core`, `src/core`: fundamental identity/constraint types.
-- `include/rules`, `src/rules`: state, move tables, legal moves, apply/undo,
-  propagation and terminal rules.
-- `include/search`, `src/search`: Stage 1 Alpha-Beta and TT.
-- `include/exact`, `src/exact`: Stage 2 canonical successor equivalence.
-- `include/io`, `src/io`: JSON protocol and official action codec.
-- `tests`: deterministic rule/search/protocol/invariant tests.
-- `benchmarks`: repeatable Stage 1, A/B L_eq and self-play programs.
+```text
+QuantumShogiAnimal/
+|-- include/                  Public C++ headers, grouped by owning module
+|   |-- core/                 Domain types, configuration, state and shared timing
+|   |-- rules/                State transitions and legal-move API
+|   |-- search/               Alpha-Beta search API and search statistics
+|   |-- exact/                Canonical successor-equivalence API
+|   `-- io/                   Contest protocol and action-codec API
+|-- src/                      C++ implementations matching include/
+|   |-- core/
+|   |-- rules/
+|   |-- search/
+|   |-- exact/
+|   |-- io/
+|   `-- main.cpp              Contest executable and development CLI boundary
+|-- tests/                    Deterministic C++ regression and invariant tests
+|   `-- evaluation/           Python tests for the evaluation framework
+|-- benchmarks/               Repeatable search, memory and self-play benchmarks
+|-- evaluation/               External version-evaluation orchestration
+|   |-- cmake/                Evaluation build-manifest generation
+|   |-- config/               Profiles and acceptance policy
+|   |-- corpus/               Versioned correctness/performance position corpus
+|   |-- native/               Native referee and benchmark adapters
+|   |-- schemas/              JSON artifact schemas
+|   |-- tools/                Pipeline, analysis and reporting commands
+|   `-- versions/             Frozen accepted engine artifacts and registry
+|-- scripts/                  Windows entry points for evaluation workflows
+|-- docs/                     Rules, architecture and development policies
+|-- CMakeLists.txt            Build targets and test registration
+|-- engine_config.json        Runtime profiles and engine defaults
+`-- README.md                 Build, usage and repository overview
+```
+
+Production dependency direction remains `core <- rules <- search`; `io` depends
+on `core` and `rules`, while `exact` integrates through the search extension
+boundary. `evaluation/` may consume production modules, but production code does
+not depend on evaluation orchestration. Generated directories such as `build/`,
+`reports/` and `local_reports/` are intentionally omitted from the source tree.
 
 ## Evidence
 

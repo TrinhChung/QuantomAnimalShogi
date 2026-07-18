@@ -64,6 +64,25 @@ void test_initial_and_tables() {
     check(qas::contains(south_forward, qas::Animal::Lion), "adjacent table contains lion");
 }
 
+void test_profiled_legal_generation_matches_regular_generation() {
+    const qas::State state = qas::initial_state();
+    const std::vector<qas::Move> regular = qas::generate_legal_moves(state);
+    std::vector<qas::Move> profiled;
+    std::vector<qas::Move> candidates;
+    qas::RuleMetrics metrics;
+
+    qas::generate_legal_moves_profiled(state, profiled, candidates, metrics);
+
+    check(profiled == regular, "profiled and regular legal generation preserve move order");
+    check(metrics.pseudo_move_generation_calls == 1 &&
+              metrics.pseudo_moves_generated == candidates.size(),
+          "profiled generation records the shared candidate phase");
+    check(metrics.legal_filter_calls == 1 && metrics.legal_moves_generated == profiled.size(),
+          "profiled generation records the shared legal-filter phase");
+    check(metrics.pseudo_moves_rejected == candidates.size() - profiled.size(),
+          "profiled generation counts rejected candidates without changing results");
+}
+
 void test_apply_undo_and_external_mapping() {
     qas::State state = qas::initial_state();
     const qas::State original = state;
@@ -244,7 +263,7 @@ void test_promotion_try_and_draw() {
           "Try does not succeed when the candidate can be captured immediately");
 
     qas::State draw = exact_state();
-    draw.turn = 255;
+    draw.turn = qas::kTurnLimit - 1;
     qas::recompute_hash(draw);
     const auto legal = qas::generate_legal_moves(draw);
     check(!legal.empty(), "turn-255 state has a move");
@@ -276,7 +295,7 @@ void test_hand_drop_illegal_transition_and_terminal_priority() {
     move_all_to_hands(priority);
     place(priority, 0, 4);
     place(priority, 4, 1);
-    priority.turn = 255;
+    priority.turn = qas::kTurnLimit - 1;
     qas::recompute_hash(priority);
     check(qas::apply_move(priority, qas::Move{0, 4, 1}, undo), "turn-256 Catch transition applies");
     check(priority.terminal == qas::Terminal::Catch && priority.winner == 0,
@@ -350,6 +369,7 @@ void test_initial_perft() {
 
 int main() {
     test_initial_and_tables();
+    test_profiled_legal_generation_matches_regular_generation();
     test_apply_undo_and_external_mapping();
     test_global_propagation();
     test_propagation_lut_matches_reference();

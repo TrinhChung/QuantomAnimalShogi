@@ -1,5 +1,3 @@
-#include "rules/game.hpp"
-
 #include <array>
 #include <istream>
 #include <ostream>
@@ -7,16 +5,18 @@
 #include <stdexcept>
 #include <string>
 
+#include "rules/game.hpp"
+
 namespace qas {
 
 State parse_state(std::istream& input) {
     std::string side_text;
     int turn = 0;
-    if (!(input >> side_text >> turn) || turn < 0 || turn > 256) {
+    if (!(input >> side_text >> turn) || turn < 0 || turn > kTurnLimit) {
         throw std::invalid_argument("state header must be: <S|N> <turn 0..256>");
     }
     State state;
-    state.board.fill(-1);
+    state.board.fill(kEmptyBoardSquare);
     for (int piece = 0; piece < physical_piece_count; ++piece) {
         state.pos[piece] = static_cast<std::uint8_t>(first_hand_slot + piece);
     }
@@ -38,10 +38,14 @@ State parse_state(std::istream& input) {
             throw std::invalid_argument("piece line must be: id owner origin position mask");
         }
         seen[id] = true;
-        if (owner == "N" || owner == "n") state.owner_bits |= static_cast<std::uint8_t>(1U << id);
-        else if (owner != "S" && owner != "s") throw std::invalid_argument("invalid owner");
-        if (origin == "N" || origin == "n") state.origin_bits |= static_cast<std::uint8_t>(1U << id);
-        else if (origin != "S" && origin != "s") throw std::invalid_argument("invalid origin");
+        if (owner == "N" || owner == "n")
+            state.owner_bits |= static_cast<std::uint8_t>(1U << id);
+        else if (owner != "S" && owner != "s")
+            throw std::invalid_argument("invalid owner");
+        if (origin == "N" || origin == "n")
+            state.origin_bits |= static_cast<std::uint8_t>(1U << id);
+        else if (origin != "S" && origin != "s")
+            throw std::invalid_argument("invalid origin");
         if (!position.empty() && (position[0] == 'H' || position[0] == 'h')) {
             const int slot = position.size() == 1 ? id : std::stoi(position.substr(1));
             if (slot < 0 || slot >= physical_piece_count) {
@@ -50,21 +54,25 @@ State parse_state(std::istream& input) {
             state.pos[id] = static_cast<std::uint8_t>(first_hand_slot + slot);
         } else {
             const int square = std::stoi(position);
-            if (square < 0 || square >= board_size || state.board[square] != -1) {
+            if (square < 0 || square >= board_size || state.board[square] != kEmptyBoardSquare) {
                 throw std::invalid_argument("invalid or occupied square");
             }
             state.pos[id] = static_cast<std::uint8_t>(square);
             state.board[square] = static_cast<std::int8_t>(id);
         }
         Mask mask = 0;
-        for (char code : mask_text) mask |= bit(parse_animal(std::string(1, code)));
+        for (char code : mask_text)
+            mask |= bit(parse_animal(std::string(1, code)));
         state.mask[id] = mask;
     }
-    if (!propagate(state)) throw std::invalid_argument("state has contradictory masks");
-    if (state.turn >= 256) state.terminal = Terminal::Draw;
+    if (!propagate(state))
+        throw std::invalid_argument("state has contradictory masks");
+    if (state.turn >= kTurnLimit)
+        state.terminal = Terminal::Draw;
     recompute_hash(state);
     std::string error;
-    if (!validate_state(state, &error)) throw std::invalid_argument(error);
+    if (!validate_state(state, &error))
+        throw std::invalid_argument(error);
     return state;
 }
 
@@ -83,22 +91,30 @@ void write_state(const State& state, std::ostream& output) {
 }
 
 std::string move_string(const Move& move) {
-    if (!move.valid()) return "invalid";
+    if (!move.valid())
+        return "invalid";
     std::ostringstream output;
     output << 'p' << static_cast<int>(move.piece) << ':';
-    if (is_hand_position(move.from)) output << "hand" << static_cast<int>(move.from - first_hand_slot);
-    else output << static_cast<int>(move.from);
+    if (is_hand_position(move.from))
+        output << "hand" << static_cast<int>(move.from - first_hand_slot);
+    else
+        output << static_cast<int>(move.from);
     output << "->" << static_cast<int>(move.to);
     return output.str();
 }
 
 std::string terminal_name(Terminal terminal) {
     switch (terminal) {
-        case Terminal::None: return "none";
-        case Terminal::Catch: return "catch";
-        case Terminal::Try: return "try";
-        case Terminal::Draw: return "draw";
-        case Terminal::Illegal: return "illegal";
+        case Terminal::None:
+            return "none";
+        case Terminal::Catch:
+            return "catch";
+        case Terminal::Try:
+            return "try";
+        case Terminal::Draw:
+            return "draw";
+        case Terminal::Illegal:
+            return "illegal";
     }
     return "unknown";
 }

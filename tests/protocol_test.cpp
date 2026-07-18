@@ -20,26 +20,29 @@ void check(bool condition, const std::string& message) {
 }
 
 std::string initial_json(const std::array<int, qas::external_action_count>& mask) {
-    const std::array<int, 9> empty{};
-    const std::array<int, 9> mine{1, 1, 1, 1, 0, 1, 0, 1, 0};
-    const std::array<int, 9> opponent{1, 1, 1, 1, 0, 0, 1, 0, 1};
+    const std::array<int, qas::kObservationFieldCount> empty{};
+    const std::array<int, qas::kObservationFieldCount> mine{1, 1, 1, 1, 0, 1, 0, 1, 0};
+    const std::array<int, qas::kObservationFieldCount> opponent{1, 1, 1, 1, 0, 0, 1, 0, 1};
     std::ostringstream output;
     output << "{\"command\":\"get_action\",\"observation\":{\"observation\":[";
     for (int source = 0; source < qas::external_source_count; ++source) {
-        if (source != 0) output << ',';
+        if (source != 0)
+            output << ',';
         const bool mine_square = source == 7 || source == 9 || source == 10 || source == 11;
         const bool opponent_square = source == 0 || source == 1 || source == 2 || source == 4;
         const auto& entry = mine_square ? mine : (opponent_square ? opponent : empty);
         output << '[';
-        for (int field = 0; field < 9; ++field) {
-            if (field != 0) output << ',';
+        for (std::size_t field = 0; field < qas::kObservationFieldCount; ++field) {
+            if (field != 0)
+                output << ',';
             output << entry[field];
         }
         output << ']';
     }
     output << "],\"action_mask\":[";
     for (int action = 0; action < qas::external_action_count; ++action) {
-        if (action != 0) output << ',';
+        if (action != 0)
+            output << ',';
         output << mask[action];
     }
     output << "],\"turn\":0}}";

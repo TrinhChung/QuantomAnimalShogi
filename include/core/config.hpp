@@ -98,9 +98,29 @@ struct ResourceEstimate {
     std::size_t tt_allocated_bytes{0};
 };
 
+/// @brief Builds the defaults associated with a named runtime profile.
+/// @param profile Supported profile name.
+/// @return Fully initialized engine configuration.
+/// @throws std::invalid_argument If the profile name is unknown.
 EngineConfig profile_config(const std::string& profile);
+
+/// @brief Loads profile defaults and applies overrides from a JSON configuration file.
+/// @param path Configuration file path; an empty or unreadable path uses defaults.
+/// @param profile_override Optional profile name that takes precedence over the file.
+/// @return Merged engine configuration.
+/// @throws std::invalid_argument If the selected profile name is unknown.
 EngineConfig load_engine_config(const std::string& path, const std::string& profile_override = {});
+
+/// @brief Detects installed physical memory using the current operating system.
+/// @return Physical memory in MiB, or zero when detection is unavailable.
 std::size_t detect_physical_ram_mb();
+
+/// @brief Calculates a bounded power-of-two transposition-table allocation.
+/// @param config Runtime memory and transposition-table configuration.
+/// @param tt_entry_size Size of one transposition-table entry in bytes.
+/// @param min_tt_mb Preferred minimum table size in MiB.
+/// @param max_tt_mb Absolute caller-provided maximum table size in MiB.
+/// @return Resource estimate and chosen table allocation.
 ResourceEstimate estimate_resources(const EngineConfig& config,
                                     std::size_t tt_entry_size,
                                     std::size_t min_tt_mb = 16,

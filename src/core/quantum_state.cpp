@@ -3,25 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
-#include <sstream>
 
 namespace qas {
-
-const char* animal_name(Animal animal) {
-    switch (animal) {
-        case Animal::Chick:
-            return "chick";
-        case Animal::Elephant:
-            return "elephant";
-        case Animal::Giraffe:
-            return "giraffe";
-        case Animal::Lion:
-            return "lion";
-        case Animal::Hen:
-            return "hen";
-    }
-    throw std::invalid_argument("unknown animal");
-}
 
 char animal_code(Animal animal) {
     switch (animal) {
@@ -154,9 +137,10 @@ std::vector<QuantumState::Assignment> QuantumState::assignments() const {
         if (valid) {
             result.push_back(permutation);
         }
-    } while (std::next_permutation(permutation.begin(), permutation.end(), [](Animal left, Animal right) {
-        return static_cast<unsigned>(left) < static_cast<unsigned>(right);
-    }));
+    } while (std::next_permutation(
+        permutation.begin(), permutation.end(), [](Animal left, Animal right) {
+            return static_cast<unsigned>(left) < static_cast<unsigned>(right);
+        }));
     return result;
 }
 
@@ -178,9 +162,10 @@ void QuantumState::normalize() {
 Probability QuantumState::probability(std::size_t piece, Animal animal) const {
     validate_piece(piece);
     const auto valid = assignments();
-    const auto matches = std::count_if(valid.begin(), valid.end(), [piece, animal](const Assignment& item) {
-        return item[piece] == animal;
-    });
+    const auto matches =
+        std::count_if(valid.begin(), valid.end(), [piece, animal](const Assignment& item) {
+            return item[piece] == animal;
+        });
     return {static_cast<std::size_t>(matches), valid.size()};
 }
 

@@ -8,11 +8,45 @@
 #include <stdexcept>
 #include <utility>
 
+#include "core/timing.hpp"
+
 namespace qas {
 namespace {
 
+/// @brief Computes the bit width required to encode a zero-based value range.
+/// @param value_count Number of distinct values in the range.
+/// @return Minimum number of bits that can encode every value.
+constexpr unsigned required_bit_count(std::size_t value_count) {
+    unsigned bit_count = 0;
+    for (std::size_t maximum = value_count - 1; maximum != 0; maximum >>= 1U)
+        ++bit_count;
+    return bit_count;
+}
+
+constexpr unsigned kDestinationBitCount = required_bit_count(board_size);
+constexpr unsigned kSourceBitCount = required_bit_count(external_source_count);
+constexpr unsigned kPieceBitCount = required_bit_count(physical_piece_count);
+constexpr unsigned kSourceShift = kDestinationBitCount;
+constexpr unsigned kPieceShift = kSourceShift + kSourceBitCount;
+constexpr unsigned kPackedMoveBitCount = kPieceShift + kPieceBitCount;
+constexpr std::uint16_t kDestinationMask =
+    static_cast<std::uint16_t>((1U << kDestinationBitCount) - 1U);
+constexpr std::uint16_t kSourceMask = static_cast<std::uint16_t>((1U << kSourceBitCount) - 1U);
+constexpr std::uint16_t kPieceMask = static_cast<std::uint16_t>((1U << kPieceBitCount) - 1U);
+constexpr int kMateScoreMargin = 512;
+constexpr int kMateStopMargin = 256;
+constexpr std::uint64_t kStopCheckNodeInterval = 64;
+constexpr std::uint64_t kStopCheckNodeMask = kStopCheckNodeInterval - 1;
+
+static_assert(kPackedMoveBitCount < std::numeric_limits<std::uint16_t>::digits,
+              "packed move must leave a distinct invalid sentinel");
+static_assert((kStopCheckNodeInterval & kStopCheckNodeMask) == 0,
+              "stop-check interval must be a power of two");
+
 class ComponentTimer {
    public:
+    /// @brief Starts optional timing and increments a component call counter.
+    /// @param counter Optional counter; null disables all timing work.
     explicit ComponentTimer(TimedCounter* counter) : counter_(counter) {
         if (counter_ != nullptr) {
             ++counter_->calls;
@@ -20,11 +54,10 @@ class ComponentTimer {
         }
     }
 
+    /// @brief Adds the scoped elapsed time to the component counter.
     ~ComponentTimer() {
         if (counter_ != nullptr) {
-            counter_->elapsed_ms +=
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
-                    .count();
+            counter_->elapsed_ms += elapsed_milliseconds(start_);
         }
     }
 
@@ -33,6 +66,9 @@ class ComponentTimer {
     std::chrono::steady_clock::time_point start_{};
 };
 
+/// @brief Counts set bits in an animal-form mask.
+/// @param mask Mask to inspect.
+/// @return Number of candidate forms.
 int popcount(Mask mask) {
     int count = 0;
     for (; mask != 0; mask = static_cast<Mask>(mask & (mask - 1)))
@@ -40,6 +76,9 @@ int popcount(Mask mask) {
     return count;
 }
 
+/// @brief Counts set squares in a board bitmask.
+/// @param mask Board bitmask to inspect.
+/// @return Number of set board squares.
 int popcount_board(std::uint16_t mask) {
     int count = 0;
     for (; mask != 0; mask = static_cast<std::uint16_t>(mask & (mask - 1)))
@@ -47,6 +86,9 @@ int popcount_board(std::uint16_t mask) {
     return count;
 }
 
+/// @brief Computes mean material value across candidate forms.
+/// @param mask Candidate-form mask.
+/// @return Integer mean value, or zero for an empty mask.
 int expected_piece_value(Mask mask) {
     constexpr std::array<int, 5> values{100, 320, 310, 1050, 420};
     int total = 0;
@@ -60,6 +102,9 @@ int expected_piece_value(Mask mask) {
     return count == 0 ? 0 : total / count;
 }
 
+/// @brief Counts bits during compile-time lookup-table construction.
+/// @param value Unsigned mask to inspect.
+/// @return Number of set bits.
 constexpr int constant_popcount(unsigned value) {
     int count = 0;
     while (value != 0) {
@@ -69,6 +114,8 @@ constexpr int constant_popcount(unsigned value) {
     return count;
 }
 
+/// @brief Builds popcounts for every five-bit animal-form mask.
+/// @return Compile-time 32-entry popcount table.
 constexpr std::array<int, 32> build_mask_popcounts() {
     std::array<int, 32> result{};
     for (unsigned mask = 0; mask < result.size(); ++mask)
@@ -76,6 +123,8 @@ constexpr std::array<int, 32> build_mask_popcounts() {
     return result;
 }
 
+/// @brief Builds expected material values for every animal-form mask.
+/// @return Compile-time 32-entry material table.
 constexpr std::array<int, 32> build_expected_piece_values() {
     constexpr std::array<int, 5> values{100, 320, 310, 1050, 420};
     std::array<int, 32> result{};
@@ -97,6 +146,10 @@ inline constexpr auto kMaskPopcounts = build_mask_popcounts();
 inline constexpr auto kExpectedPieceValues = build_expected_piece_values();
 inline constexpr std::uint16_t kBoardMask = (1U << board_size) - 1U;
 
+/// @brief Counts Lion-capable pieces currently owned by a side.
+/// @param state Source state.
+/// @param owner Current owner to count.
+/// @return Number of owned Lion candidates.
 int lion_candidate_count(const State& state, Side owner) {
     int count = 0;
     for (int piece = 0; piece < physical_piece_count; ++piece) {
@@ -106,6 +159,10 @@ int lion_candidate_count(const State& state, Side owner) {
     return count;
 }
 
+/// @brief Counts locally reachable destinations without full transition validation.
+/// @param state Source state.
+/// @param side Side whose mobility is counted.
+/// @return Geometric mobility count.
 int geometric_mobility(const State& state, Side side) {
     int result = 0;
     const auto& tables = move_tables();
@@ -114,7 +171,7 @@ int geometric_mobility(const State& state, Side side) {
             continue;
         if (is_hand_position(state.pos[piece])) {
             for (int square = 0; square < board_size; ++square) {
-                if (state.board[square] == -1)
+                if (state.board[square] == kEmptyBoardSquare)
                     ++result;
             }
             continue;
@@ -132,14 +189,19 @@ int geometric_mobility(const State& state, Side side) {
     return result;
 }
 
-bool side_has_immediate_win_baseline(const State& state, Side side, EvalComponentProfile* profile) {
+/// @brief Exhaustively tests pseudo-legal moves for an immediate Catch or Try.
+/// @param state Source state.
+/// @param side Side to install as the mover.
+/// @param profile Optional per-component timing sink.
+/// @return `true` when at least one transition immediately wins.
+bool side_has_immediate_win(const State& state, Side side, EvalComponentProfile* profile) {
     State copy;
     {
         ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_setup);
         copy = state;
         copy.side_to_move = side;
         copy.terminal = Terminal::None;
-        copy.winner = -1;
+        copy.winner = kNoWinner;
         recompute_hash(copy);
     }
     std::vector<Move> moves;
@@ -162,17 +224,17 @@ bool side_has_immediate_win_baseline(const State& state, Side side, EvalComponen
             copy = state;
             copy.side_to_move = side;
             copy.terminal = Terminal::None;
-            copy.winner = -1;
+            copy.winner = kNoWinner;
             recompute_hash(copy);
         }
     }
     return false;
 }
 
-bool side_has_immediate_win(const State& state, Side side) {
-    return side_has_immediate_win_baseline(state, side, nullptr);
-}
-
+/// @brief Measures forward progress of a square toward a side's Try rank.
+/// @param square Board or hand position.
+/// @param side Moving side.
+/// @return Nonnegative row progress, or zero for hand positions.
 int progress_to_try(int square, Side side) {
     if (square >= board_size)
         return 0;
@@ -180,36 +242,54 @@ int progress_to_try(int square, Side side) {
     return side == Side::South ? board_height - 1 - row : row;
 }
 
+/// @brief Packs a valid move into the transposition-table representation.
+/// @param move Move to pack.
+/// @return Packed move or `kInvalidPackedMove` for an invalid move.
 std::uint16_t pack_move(const Move& move) {
     if (!move.valid())
-        return 0xFFFFU;
-    return static_cast<std::uint16_t>(move.to | (move.from << 4U) | (move.piece << 9U));
+        return kInvalidPackedMove;
+    return static_cast<std::uint16_t>(move.to | (move.from << kSourceShift) |
+                                      (move.piece << kPieceShift));
 }
 
+/// @brief Unpacks a transposition-table move representation.
+/// @param packed Packed move value.
+/// @return Decoded move or an invalid move for `kInvalidPackedMove`.
 Move unpack_move(std::uint16_t packed) {
-    if (packed == 0xFFFFU)
+    if (packed == kInvalidPackedMove)
         return {};
-    return Move{static_cast<std::uint8_t>((packed >> 9U) & 7U),
-                static_cast<std::uint8_t>((packed >> 4U) & 31U),
-                static_cast<std::uint8_t>(packed & 15U)};
+    return Move{static_cast<std::uint8_t>((packed >> kPieceShift) & kPieceMask),
+                static_cast<std::uint8_t>((packed >> kSourceShift) & kSourceMask),
+                static_cast<std::uint8_t>(packed & kDestinationMask)};
 }
 
+/// @brief Normalizes root-relative mate distance before table storage.
+/// @param score Search score at the current ply.
+/// @param ply Distance from root.
+/// @return Transposition-table score.
 int score_to_tt(int score, int ply) {
-    if (score > mate_score - 512)
+    if (score > mate_score - kMateScoreMargin)
         return score + ply;
-    if (score < -mate_score + 512)
+    if (score < -mate_score + kMateScoreMargin)
         return score - ply;
     return score;
 }
 
+/// @brief Restores current-root mate distance after a table probe.
+/// @param score Stored transposition-table score.
+/// @param ply Distance from root.
+/// @return Search score for the current ply.
 int score_from_tt(int score, int ply) {
-    if (score > mate_score - 512)
+    if (score > mate_score - kMateScoreMargin)
         return score - ply;
-    if (score < -mate_score + 512)
+    if (score < -mate_score + kMateScoreMargin)
         return score + ply;
     return score;
 }
 
+/// @brief Accumulates every rule metric field into a search-owned total.
+/// @param target Metrics accumulator to mutate.
+/// @param source Metrics sample to add.
 void add_rule_metrics(RuleMetrics& target, const RuleMetrics& source) {
     target.pseudo_move_generation_calls += source.pseudo_move_generation_calls;
     target.pseudo_moves_generated += source.pseudo_moves_generated;
@@ -237,10 +317,10 @@ AlphaBetaEngine::AlphaBetaEngine(std::size_t table_entries) {
     }
     table_.resize(table_entries);
     table_mask_ = table_entries - 1;
-    for (std::size_t ply = 0; ply < max_search_ply; ++ply) {
-        move_pool_[ply].reserve(128);
-        candidate_pool_[ply].reserve(128);
-        score_pool_[ply].reserve(128);
+    for (std::size_t ply = 0; ply < kMaxSearchPly; ++ply) {
+        move_pool_[ply].reserve(kMoveBufferCapacity);
+        candidate_pool_[ply].reserve(kMoveBufferCapacity);
+        score_pool_[ply].reserve(kMoveBufferCapacity);
     }
 }
 
@@ -291,7 +371,8 @@ bool AlphaBetaEngine::should_stop() {
         stopped_ = true;
         return true;
     }
-    if ((stats_.searched_nodes & 63U) == 0U && std::chrono::steady_clock::now() >= hard_deadline_) {
+    if ((stats_.searched_nodes & kStopCheckNodeMask) == 0U &&
+        std::chrono::steady_clock::now() >= hard_deadline_) {
         stopped_ = true;
     }
     return stopped_;
@@ -359,9 +440,9 @@ int AlphaBetaEngine::evaluate_baseline(const State& state, EvalComponentProfile*
             18 * (geometric_mobility(state, Side::South) - geometric_mobility(state, Side::North));
     }
 
-    if (side_has_immediate_win_baseline(state, Side::South, profile))
+    if (side_has_immediate_win(state, Side::South, profile))
         south_score += 3500;
-    if (side_has_immediate_win_baseline(state, Side::North, profile))
+    if (side_has_immediate_win(state, Side::North, profile))
         south_score -= 3500;
     return state.side_to_move == Side::South ? south_score : -south_score;
 }
@@ -457,7 +538,7 @@ int AlphaBetaEngine::evaluate_optimized(const State& state,
             copy = state;
             copy.side_to_move = side;
             copy.terminal = Terminal::None;
-            copy.winner = -1;
+            copy.winner = kNoWinner;
             recompute_hash(copy);
         }
         {
@@ -517,7 +598,7 @@ int AlphaBetaEngine::evaluate_search(const State& state) {
                           : evaluate_baseline(state, profile);
     const auto end = std::chrono::steady_clock::now();
     ++stats_.eval_calls;
-    stats_.eval_ms += std::chrono::duration<double, std::milli>(end - begin).count();
+    stats_.eval_ms += elapsed_milliseconds(begin, end);
     return score;
 }
 
@@ -533,12 +614,12 @@ bool AlphaBetaEngine::apply_search_move(State& state, const Move& move, Undo& un
 }
 
 void AlphaBetaEngine::update_pv(int ply, const Move& move) {
-    if (ply < 0 || ply >= static_cast<int>(max_search_ply))
+    if (ply < 0 || ply >= static_cast<int>(kMaxSearchPly))
         return;
     auto& line = pv_pool_[static_cast<std::size_t>(ply)];
     line.clear();
     line.push_back(move);
-    if (ply + 1 < static_cast<int>(max_search_ply)) {
+    if (ply + 1 < static_cast<int>(kMaxSearchPly)) {
         const auto& child = pv_pool_[static_cast<std::size_t>(ply + 1)];
         line.insert(line.end(), child.begin(), child.end());
     }
@@ -596,8 +677,8 @@ int AlphaBetaEngine::move_order_score(const State& state,
     if (options_.lion_reduction_ordering_enabled)
         score += (before_lions - after_lions) * 70'000;
     if (options_.prevent_loss_ordering_enabled &&
-        side_has_immediate_win(state, opposite(state.side_to_move)) &&
-        !side_has_immediate_win(after, after.side_to_move)) {
+        side_has_immediate_win(state, opposite(state.side_to_move), nullptr) &&
+        !side_has_immediate_win(after, after.side_to_move, nullptr)) {
         score += 400'000;
     }
     if (after.pos[move.piece] < board_size && contains(after.mask[move.piece], Animal::Lion)) {
@@ -619,7 +700,7 @@ void AlphaBetaEngine::order_moves(const State& state,
     if (options_.benchmark_instrumentation_enabled) {
         begin = std::chrono::steady_clock::now();
     }
-    auto& scored = score_pool_[std::min<std::size_t>(ply, max_search_ply - 1)];
+    auto& scored = score_pool_[std::min<std::size_t>(ply, kMaxSearchPly - 1)];
     scored.clear();
     for (const Move& move : moves) {
         scored.emplace_back(move_order_score(state, move, tt_move, ply), move);
@@ -631,22 +712,20 @@ void AlphaBetaEngine::order_moves(const State& state,
         moves[index] = scored[index].second;
     if (options_.benchmark_instrumentation_enabled) {
         ++stats_.move_order_calls;
-        stats_.move_order_ms +=
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
-                .count();
+        stats_.move_order_ms += elapsed_milliseconds(begin);
     }
 }
 
 void AlphaBetaEngine::generate_search_moves(
     const State& state, const Move& tt_move, int depth, int ply, std::vector<Move>& moves) {
-    auto& scratch = candidate_pool_[std::min<std::size_t>(ply, max_search_ply - 1)];
+    auto& scratch = candidate_pool_[std::min<std::size_t>(ply, kMaxSearchPly - 1)];
     if (options_.benchmark_instrumentation_enabled) {
         const auto begin = std::chrono::steady_clock::now();
         RuleMetrics metrics;
         generate_legal_moves_profiled(state, moves, scratch, metrics, options_.propagation_mode);
         const auto end = std::chrono::steady_clock::now();
         ++stats_.movegen_calls;
-        stats_.movegen_ms += std::chrono::duration<double, std::milli>(end - begin).count();
+        stats_.movegen_ms += elapsed_milliseconds(begin, end);
         add_rule_metrics(stats_.rule_metrics, metrics);
         stats_.propagation_calls += metrics.propagation_calls;
         stats_.propagation_ms += metrics.propagation_ms;
@@ -677,8 +756,7 @@ void AlphaBetaEngine::generate_search_moves(
             options_.benchmark_instrumentation_enabled ? &reducer_stats : nullptr);
         const auto end = std::chrono::steady_clock::now();
         if (applied) {
-            stats_.leq_grouping_ms +=
-                std::chrono::duration<double, std::milli>(end - begin).count();
+            stats_.leq_grouping_ms += elapsed_milliseconds(begin, end);
             ++stats_.leq_grouped_nodes;
             stats_.leq_skipped_moves += raw_move_count - moves.size();
             stats_.leq_raw_moves += raw_move_count;
@@ -694,7 +772,7 @@ void AlphaBetaEngine::generate_search_moves(
 
 int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int ply) {
     ++stats_.searched_nodes;
-    if (options_.benchmark_instrumentation_enabled && ply < static_cast<int>(max_search_ply)) {
+    if (options_.benchmark_instrumentation_enabled && ply < static_cast<int>(kMaxSearchPly)) {
         pv_pool_[static_cast<std::size_t>(ply)].clear();
     }
     if (should_stop())
@@ -733,7 +811,7 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         }
     }
 
-    auto& moves = move_pool_[std::min<std::size_t>(ply, max_search_ply - 1)];
+    auto& moves = move_pool_[std::min<std::size_t>(ply, kMaxSearchPly - 1)];
     generate_search_moves(state, tt_move, depth, ply, moves);
     if (moves.empty())
         return -mate_score + ply;
@@ -777,7 +855,7 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
                 ++stats_.first_move_cutoffs;
             if (move == tt_move)
                 ++stats_.tt_move_cutoffs;
-            const bool quiet = state.board[move.to] == -1;
+            const bool quiet = state.board[move.to] == kEmptyBoardSquare;
             if (quiet && options_.killer_enabled && ply < static_cast<int>(killers_.size())) {
                 if (killers_[ply][0] != move) {
                     killers_[ply][1] = killers_[ply][0];
@@ -890,7 +968,7 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
                 value /= 2;
     if (options_.benchmark_instrumentation_enabled) {
         const std::size_t maximum_pv_length = std::min<std::size_t>(
-            max_search_ply, static_cast<std::size_t>(std::max(1, options_.max_depth)));
+            kMaxSearchPly, static_cast<std::size_t>(std::max(1, options_.max_depth)));
         for (std::size_t ply = 0; ply < maximum_pv_length; ++ply) {
             pv_pool_[ply].reserve(maximum_pv_length - ply);
         }
@@ -907,9 +985,7 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
     const auto fallback = generate_legal_moves(root, options_.propagation_mode);
     if (fallback.empty()) {
         result.score = root.terminal == Terminal::None ? -mate_score : terminal_score(root, 0);
-        stats_.elapsed_ms =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
-                .count();
+        stats_.elapsed_ms = elapsed_milliseconds(start_);
         result.stats = stats_;
         return result;
     }
@@ -933,7 +1009,7 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
         int beta = search_infinity;
         int window = std::max(1, options.aspiration_initial_window);
         if (options.aspiration_enabled && depth > 1 && stats_.depth_reached > 0 &&
-            std::abs(result.score) < mate_score - 512) {
+            std::abs(result.score) < mate_score - kMateScoreMargin) {
             alpha = std::max(-search_infinity, result.score - window);
             beta = std::min(search_infinity, result.score + window);
         }
@@ -971,20 +1047,19 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
         result.pv_line = options_.benchmark_instrumentation_enabled ? pv_pool_[0]
                                                                     : std::vector<Move>{depth_move};
         stats_.depth_reached = depth;
-        stats_.completed_depths.push_back(
-            DepthReport{depth,
-                        depth_score,
-                        depth_move,
-                        stats_.searched_nodes - nodes_before,
-                        std::chrono::duration<double, std::milli>(depth_end - depth_start).count(),
-                        result.pv_line});
-        if (std::abs(depth_score) >= mate_score - 256)
+        stats_.completed_depths.push_back(DepthReport{depth,
+                                                      depth_score,
+                                                      depth_move,
+                                                      stats_.searched_nodes - nodes_before,
+                                                      elapsed_milliseconds(depth_start, depth_end),
+                                                      result.pv_line});
+        if (std::abs(depth_score) >= mate_score - kMateStopMargin)
             break;
         if (!options.iterative_deepening_enabled)
             break;
     }
     const auto end = std::chrono::steady_clock::now();
-    stats_.elapsed_ms = std::chrono::duration<double, std::milli>(end - start_).count();
+    stats_.elapsed_ms = elapsed_milliseconds(start_, end);
     stats_.timeout_hit = stopped_;
     stats_.timeout_depth = stopped_ ? stats_.started_depth : 0;
     result.stats = stats_;

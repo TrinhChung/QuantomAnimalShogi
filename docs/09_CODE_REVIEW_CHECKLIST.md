@@ -9,6 +9,7 @@ Complete applicable items before merge. A checked item means the reviewer inspec
 - [ ] Are module dependencies allowed and free of cycles?
 - [ ] Is data flow explicit, with no hidden mutable global state?
 - [ ] Are failure modes and invariants represented explicitly?
+- [ ] Does every named production function have one current canonical Doxygen contract?
 
 ## Rules and State
 

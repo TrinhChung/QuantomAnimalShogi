@@ -17,6 +17,10 @@ using qas::Animal;
 using qas::QuantumState;
 using qas::Side;
 
+/// @brief Converts a one-based demo piece number to a zero-based index.
+/// @param one_based User-facing piece number in `[1, 4]`.
+/// @return Zero-based piece index.
+/// @throws std::invalid_argument If the number is outside the supported range.
 std::size_t piece_index(int one_based) {
     if (one_based < 1 || one_based > 4) {
         throw std::invalid_argument("piece must be in [1, 4]");
@@ -24,6 +28,10 @@ std::size_t piece_index(int one_based) {
     return static_cast<std::size_t>(one_based - 1);
 }
 
+/// @brief Parses a demo side token.
+/// @param value Short or long South/North token.
+/// @return Parsed side.
+/// @throws std::invalid_argument If the token is unsupported.
 Side parse_side(const std::string& value) {
     if (value == "S" || value == "s" || value == "SOUTH" || value == "south") {
         return Side::South;
@@ -34,6 +42,9 @@ Side parse_side(const std::string& value) {
     throw std::invalid_argument("side must be S or N");
 }
 
+/// @brief Verifies that an operation stream contains no trailing token.
+/// @param input Operation stream positioned after expected arguments.
+/// @throws std::invalid_argument If another token remains.
 void ensure_end(std::istringstream& input) {
     std::string extra;
     if (input >> extra) {
@@ -41,6 +52,11 @@ void ensure_end(std::istringstream& input) {
     }
 }
 
+/// @brief Parses and applies one development-solver observation.
+/// @param state Quantum identity state to mutate.
+/// @param line Complete operation line.
+/// @throws std::invalid_argument If syntax or command arguments are invalid.
+/// @throws qas::Contradiction If the observation makes identities inconsistent.
 void apply_operation(QuantumState& state, const std::string& line) {
     std::istringstream input(line);
     std::string command;
@@ -95,6 +111,9 @@ void apply_operation(QuantumState& state, const std::string& line) {
     throw std::invalid_argument("unknown operation: " + command);
 }
 
+/// @brief Writes quantum identity assignments and exact probabilities.
+/// @param state Quantum identity state to report.
+/// @param output Destination stream.
 void print_state(const QuantumState& state, std::ostream& output) {
     const auto assignments = state.assignments();
     output << "assignments " << assignments.size() << '\n';
@@ -109,6 +128,11 @@ void print_state(const QuantumState& state, std::ostream& output) {
     }
 }
 
+/// @brief Executes the line-oriented quantum-identity development solver.
+/// @param input Operation-count and operation stream.
+/// @param output Normal result and contradiction stream.
+/// @param error Invalid-input diagnostic stream.
+/// @return Zero on success, one on invalid input, or two on contradiction.
 int solve(std::istream& input, std::ostream& output, std::ostream& error) {
     int operation_count = 0;
     if (!(input >> operation_count) || operation_count < 0) {
@@ -139,6 +163,8 @@ int solve(std::istream& input, std::ostream& output, std::ostream& error) {
     return 0;
 }
 
+/// @brief Prints a fixed quantum-identity demonstration.
+/// @param output Destination stream.
 void demo(std::ostream& output) {
     QuantumState state;
     output << "Initial state\n";
@@ -151,12 +177,18 @@ void demo(std::ostream& output) {
     print_state(state, output);
 }
 
+/// @brief Prints supported command-line modes.
+/// @param output Destination stream.
+/// @param program Executable name displayed in the usage line.
 void print_usage(std::ostream& output, const char* program) {
     output << "Usage: " << program
            << " <protocol|demo|solve|engine-demo|search|search-leq [milliseconds] "
               "[max-depth] [threshold]|legal>\n";
 }
 
+/// @brief Writes a development search result and instrumentation summary.
+/// @param result Completed search result.
+/// @param output Destination stream.
 void print_search_result(const qas::SearchResult& result, std::ostream& output) {
     if (!result.has_move) {
         output << "NO_LEGAL_MOVE\n";
@@ -183,6 +215,9 @@ void print_search_result(const qas::SearchResult& result, std::ostream& output) 
     }
 }
 
+/// @brief Maps runtime engine configuration to one search invocation.
+/// @param config Loaded engine configuration.
+/// @return Search options with optional successor equivalence installed.
 qas::SearchOptions search_options(const qas::EngineConfig& config) {
     qas::SearchOptions options;
     options.max_depth = config.search.max_depth;
@@ -218,6 +253,9 @@ qas::SearchOptions search_options(const qas::EngineConfig& config) {
     return options;
 }
 
+/// @brief Runs the blocking JSON-line contest protocol loop.
+/// @param config Runtime engine configuration.
+/// @return Zero at end-of-input or one after a protocol error.
 int run_protocol(const qas::EngineConfig& config) {
     const auto resources =
         qas::estimate_resources(config, sizeof(qas::TTEntry), 16, config.tt.max_size_mb);
@@ -270,6 +308,10 @@ int run_protocol(const qas::EngineConfig& config) {
 
 }  // namespace
 
+/// @brief Dispatches contest-protocol and development command-line modes.
+/// @param argc Number of command-line arguments.
+/// @param argv Command-line argument vector.
+/// @return Process exit status.
 int main(int argc, char** argv) {
     std::string profile_override;
     std::string config_path = "engine_config.json";
