@@ -4,7 +4,7 @@ This file is the entry point for all changes to Quantum Animal Shogi.
 
 ## Before Coding
 
-1. Read every file in `docs/00_PROJECT_PRINCIPLES.md` through `docs/09_CODE_REVIEW_CHECKLIST.md`.
+1. Read every file in `docs/00_PROJECT_PRINCIPLES.md` through `docs/10_BUILD_RULES.md`.
 2. Identify the owning module and its permitted dependencies.
 3. Find or add tests that define the behavior being changed.
 4. Keep the patch limited to one coherent purpose.
@@ -36,6 +36,12 @@ To check a file without modifying it:
 
 ```powershell
 clang-format --dry-run --Werror <changed-file.cpp>
+```
+
+Create or update builds only through the versioned build layout:
+
+```powershell
+scripts\build_version.ps1 -Version current -Configuration Release
 ```
 
 Bad: adding move generation, evaluation, and protocol formatting in one patch.

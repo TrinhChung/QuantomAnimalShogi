@@ -9,15 +9,14 @@ candidate and never promotes it automatically.
 1. Build the candidate and all standard Release targets:
 
    ```powershell
-   cmake -S . -B build
-   cmake --build build --config Release
+   scripts\build_version.ps1 -Version current -Configuration Release
    ```
 
 2. Run the single evaluation command:
 
    ```powershell
    scripts\evaluate_built_candidate.bat ^
-     --candidate-exe "build\Release\qas.exe" ^
+     --candidate-exe "build\current\Release\qas.exe" ^
      --candidate-name "Stage 5.1" ^
      --candidate-version-id stage5-1 ^
      --change-category performance_only ^
@@ -84,18 +83,18 @@ reported. The exact fixture IDs and fully resolved profile are saved in each run
 Run any canonical profile by changing only `--profile`:
 
 ```powershell
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile infrastructure_smoke
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile correctness_regression
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_depth_quick
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_depth_deep
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_time_quick
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_time_contest
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile diagnostic_telemetry
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile strength_quick
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile strength_candidate
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile promotion_test
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile reliability_soak
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Candidate" --change-category architecture_change --profile architecture_change_full
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile infrastructure_smoke
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile correctness_regression
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_depth_quick
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_depth_deep
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_time_quick
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile fixed_time_contest
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile diagnostic_telemetry
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile strength_quick
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile strength_candidate
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile promotion_test
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category performance_only --profile reliability_soak
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Candidate" --change-category architecture_change --profile architecture_change_full
 ```
 
 Legacy names `smoke`, `quick`, `main`, `release`, and `overnight` remain compatible, but new work
@@ -106,7 +105,7 @@ should use the canonical names above.
 If the benchmark/referee companions are missing, build only the required Release targets:
 
 ```powershell
-cmake --build build --config Release --target qas qas_evaluation_benchmark qas_evaluation_referee
+cmake --build build/current --config Release --target qas qas_evaluation_benchmark qas_evaluation_referee
 ```
 
 The pipeline normally discovers the companion next to `qas.exe`. Use
@@ -120,7 +119,7 @@ resume arguments.
 The required Stage 5 anchor self-check is:
 
 ```powershell
-scripts\evaluate_built_candidate.bat --candidate-exe "build\Release\qas.exe" --candidate-name "Stage 5 anchor self-check" --change-category performance_only --profile infrastructure_smoke --opponents stage5-clean --allow-identical-binary
+scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.exe" --candidate-name "Stage 5 anchor self-check" --change-category performance_only --profile infrastructure_smoke --opponents stage5-clean --allow-identical-binary
 ```
 
 ## Permanent corpus
@@ -145,7 +144,7 @@ Freeze an accepted build once; normal evaluations always execute the saved bytes
 scripts\freeze_version.bat ^
   --version-id stage5-1 ^
   --name "Stage 5.1" ^
-  --exe "build\Release\qas.exe" ^
+  --exe "build\current\Release\qas.exe" ^
   --config "engine_config.json" ^
   --parent stage5-clean ^
   --change-category performance_only
@@ -214,7 +213,7 @@ Values are never fabricated.
 
 ```powershell
 python -m unittest discover -s tests\evaluation -p "test_*.py" -v
-ctest --test-dir build -C Release --output-on-failure
+ctest --test-dir build/current -C Release --output-on-failure
 ```
 
 The tests include engines that return an illegal action, crash, time out, emit malformed output,

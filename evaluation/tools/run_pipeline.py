@@ -17,9 +17,8 @@ from .common import (
     atomic_write_json,
     canonical_json_hash,
     copy_read_only,
-    compiler_version,
-    compiler_flags,
     cpu_model,
+    default_build_directory,
     git_metadata,
     load_json,
     locate_companion,
@@ -841,7 +840,7 @@ def run_pipeline(arguments: argparse.Namespace) -> Path:
     )
     if referee_executable is None:
         referee_executable = locate_companion(
-            repository_root() / "build" / "Release" / "qas.exe", "qas_evaluation_referee"
+            default_build_directory() / "Release" / "qas.exe", "qas_evaluation_referee"
         )
     if referee_executable is None or not referee_executable.is_file():
         raise EvaluationError("authoritative qas_evaluation_referee executable is missing")
@@ -1411,7 +1410,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0x51415335)
     parser.add_argument("--resume")
     parser.add_argument("--referee")
-    parser.add_argument("--build-dir", default=str(repository_root() / "build"))
+    parser.add_argument("--build-dir", default=str(default_build_directory()))
     parser.add_argument("--allow-identical-binary", action="store_true")
     parser.add_argument("--extend-pairs", type=int, default=0)
     parser.add_argument("--replay-game")

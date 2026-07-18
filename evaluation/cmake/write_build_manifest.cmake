@@ -1,8 +1,11 @@
-foreach(required QAS_EXE BENCHMARK_EXE REFEREE_EXE OUTPUT_FILE)
+foreach(required QAS_EXE BENCHMARK_EXE REFEREE_EXE)
     if(NOT DEFINED ${required} OR NOT EXISTS "${${required}}")
         message(FATAL_ERROR "Cannot write evaluation build manifest: ${required} is missing")
     endif()
 endforeach()
+if(NOT DEFINED OUTPUT_FILE OR OUTPUT_FILE STREQUAL "")
+    message(FATAL_ERROR "Cannot write evaluation build manifest: OUTPUT_FILE is missing")
+endif()
 
 file(SHA256 "${QAS_EXE}" QAS_SHA256)
 file(SHA256 "${BENCHMARK_EXE}" BENCHMARK_SHA256)

@@ -17,6 +17,7 @@ from typing import Any, Iterable, Mapping
 
 
 SCHEMA_VERSION = 1
+DEFAULT_BUILD_VERSION = "current"
 VERSION_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 CHANGE_CATEGORIES = {
     "optimization_only",
@@ -39,6 +40,11 @@ class EvaluationError(RuntimeError):
 
 def repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def default_build_directory() -> Path:
+    """Return the reusable versioned build directory used by local workflows."""
+    return repository_root() / "build" / DEFAULT_BUILD_VERSION
 
 
 def utc_now() -> str:
@@ -169,9 +175,22 @@ def git_metadata(root: Path) -> dict[str, Any]:
         return {"commit": None, "branch": None, "dirty": None, "status": []}
 
 
-def compiler_version() -> str:
+def build_directory_for_executable(executable: Path) -> Path:
+    """Find the versioned CMake build tree that owns an executable."""
+    executable = executable.resolve()
+    for candidate in (executable.parent, executable.parent.parent):
+        if (
+            candidate.parent == repository_root() / "build"
+            and (candidate / "CMakeCache.txt").is_file()
+        ):
+            return candidate
+    return default_build_directory()
+
+
+def compiler_version(build_directory: Path | None = None) -> str:
+    build_directory = (build_directory or default_build_directory()).resolve()
     compiler_files = sorted(
-        (repository_root() / "build" / "CMakeFiles").glob("*/CMakeCXXCompiler.cmake")
+        (build_directory / "CMakeFiles").glob("*/CMakeCXXCompiler.cmake")
     )
     for compiler_file in reversed(compiler_files):
         text = compiler_file.read_text(encoding="utf-8", errors="replace")
@@ -191,8 +210,9 @@ def compiler_version() -> str:
     return "unknown"
 
 
-def compiler_flags(build_type: str = "Release") -> str:
-    cache = repository_root() / "build" / "CMakeCache.txt"
+def compiler_flags(build_type: str = "Release", build_directory: Path | None = None) -> str:
+    build_directory = (build_directory or default_build_directory()).resolve()
+    cache = build_directory / "CMakeCache.txt"
     if not cache.is_file():
         return "unknown"
     entries: dict[str, str] = {}
@@ -318,8 +338,8 @@ def locate_companion(executable: Path, name: str) -> Path | None:
     candidates = [
         executable.parent / f"{name}{suffix}",
         executable.parent.parent / f"{name}{suffix}",
-        repository_root() / "build" / "Release" / f"{name}{suffix}",
-        repository_root() / "build" / f"{name}{suffix}",
+        default_build_directory() / "Release" / f"{name}{suffix}",
+        default_build_directory() / f"{name}{suffix}",
     ]
     for candidate in candidates:
         if candidate.is_file():

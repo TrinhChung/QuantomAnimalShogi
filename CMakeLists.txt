@@ -1,5 +1,19 @@
 cmake_minimum_required(VERSION 3.15)
+
+get_filename_component(QAS_BUILD_ROOT "${CMAKE_SOURCE_DIR}/build" ABSOLUTE)
+file(RELATIVE_PATH QAS_BUILD_RELATIVE_PATH "${QAS_BUILD_ROOT}" "${CMAKE_BINARY_DIR}")
+if(QAS_BUILD_RELATIVE_PATH STREQUAL "" OR QAS_BUILD_RELATIVE_PATH MATCHES "^\\.\\.")
+    message(
+        FATAL_ERROR
+            "Build directories must use build/<version>. Run scripts/build_version.ps1 or configure with -B build/<version>."
+    )
+endif()
+
 project(quantum_animal_shogi VERSION 1.0.0 LANGUAGES CXX)
+
+if(DEFINED CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE STREQUAL "")
+    set(QAS_REQUESTED_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

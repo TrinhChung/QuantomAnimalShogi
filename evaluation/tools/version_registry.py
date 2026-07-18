@@ -9,6 +9,7 @@ from typing import Any
 from .common import (
     EvaluationError,
     atomic_write_json,
+    build_directory_for_executable,
     compiler_version,
     compiler_flags as detected_compiler_flags,
     copy_read_only,
@@ -255,8 +256,9 @@ class VersionRegistry:
         benchmark_executable = benchmark_executable or locate_companion(
             executable, "qas_evaluation_benchmark"
         )
+        build_directory = build_directory_for_executable(executable)
         if compiler_flags == "auto":
-            compiler_flags = detected_compiler_flags("Release")
+            compiler_flags = detected_compiler_flags("Release", build_directory)
         destination.mkdir(parents=True)
         try:
             copy_read_only(executable, destination / "qas.exe")
@@ -275,7 +277,7 @@ class VersionRegistry:
                 "dirty": metadata["dirty"],
                 "dirty_paths": metadata["status"],
                 "source_tree_path": str(repository_root()),
-                "compiler": compiler_version(),
+                "compiler": compiler_version(build_directory),
                 "compiler_flags": compiler_flags,
                 "build_type": "Release",
                 "build_command": build_command,

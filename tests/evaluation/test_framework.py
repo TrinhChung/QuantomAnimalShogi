@@ -14,6 +14,7 @@ from evaluation.tools.common import (
     EvaluationError,
     append_jsonl,
     atomic_write_json,
+    default_build_directory,
     load_json,
     repository_root,
     sha256_file,
@@ -37,7 +38,7 @@ from evaluation.tools.version_registry import VersionRegistry
 
 
 ROOT = repository_root()
-REFEREE = ROOT / "build" / "Release" / "qas_evaluation_referee.exe"
+REFEREE = default_build_directory() / "Release" / "qas_evaluation_referee.exe"
 DUMMIES = ROOT / "tests" / "evaluation" / "dummy_engines"
 
 

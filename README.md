@@ -17,24 +17,30 @@ No ML, GPU, network, paid dependency or background worker is used.
 ## Build
 
 ```powershell
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
+scripts\build_version.ps1 -Version current -Configuration Release
 ```
 
 Requirements: CMake 3.15+ and a C++17 compiler. A statically linked Windows build
-is available at `build/qas.exe`.
+is available at `build/current/Release/qas.exe` with Visual Studio generators. Direct
+CMake usage must also keep the version level: `cmake -S . -B build/current`.
+
+Every generated tree uses `build/<version>`. Rebuilding `current` reuses the same directory;
+use another stable name only when a separate candidate or configuration must be preserved:
+
+```powershell
+scripts\build_version.ps1 -Version stage5-1 -Configuration Release
+```
 
 ## Contest protocol
 
 Run without arguments (or use `protocol`) and send one JSON value per line:
 
 ```powershell
-.\build\qas.exe
-.\build\qas.exe protocol 1000 64
-.\build\qas.exe --profile contest_safe
-.\build\qas.exe --profile contest_high_ram --tt-size-mb 2048
-.\build\qas.exe --profile low_ram --tt-size-mb 128
+.\build\current\Release\qas.exe
+.\build\current\Release\qas.exe protocol 1000 64
+.\build\current\Release\qas.exe --profile contest_safe
+.\build\current\Release\qas.exe --profile contest_high_ram --tt-size-mb 2048
+.\build\current\Release\qas.exe --profile low_ram --tt-size-mb 128
 ```
 
 - `get_action`: stdout contains exactly one integer in `0..239`.
@@ -56,20 +62,20 @@ destination: board 0..11
 ## Development CLI
 
 ```powershell
-.\build\qas.exe engine-demo
-Get-Content state.txt | .\build\qas.exe search 1000 8
-Get-Content state.txt | .\build\qas.exe search-leq 1000 8 12
-Get-Content state.txt | .\build\qas.exe legal
-.\build\qas_benchmark_all.exe 4
-.\build\qas_selfplay.exe 20 3
-.\build\qas_stage35_benchmark.exe --generate-fixtures --suite generate
-.\build\qas_stage35_benchmark.exe --suite smoke --repeats 7
-.\build\qas_stage35_benchmark.exe --suite fixed --depths 9,10,11,12 --repeats 7
-.\build\qas_stage35_benchmark.exe --suite iterative --time-limits-ms 5000,10000,30000 --repeats 7
-.\build\qas_stage35_benchmark.exe --suite tt --repeats 7
-.\build\qas_stage35_benchmark.exe --suite fixed --leq-threshold 24 --leq-min-depth 4 --leq-min-duplicate-ratio 0.25
-.\build\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode baseline --repeats 7
-.\build\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode optimized --repeats 7
+.\build\current\Release\qas.exe engine-demo
+Get-Content state.txt | .\build\current\Release\qas.exe search 1000 8
+Get-Content state.txt | .\build\current\Release\qas.exe search-leq 1000 8 12
+Get-Content state.txt | .\build\current\Release\qas.exe legal
+.\build\current\Release\qas_benchmark_all.exe 4
+.\build\current\Release\qas_selfplay.exe 20 3
+.\build\current\Release\qas_stage35_benchmark.exe --generate-fixtures --suite generate
+.\build\current\Release\qas_stage35_benchmark.exe --suite smoke --repeats 7
+.\build\current\Release\qas_stage35_benchmark.exe --suite fixed --depths 9,10,11,12 --repeats 7
+.\build\current\Release\qas_stage35_benchmark.exe --suite iterative --time-limits-ms 5000,10000,30000 --repeats 7
+.\build\current\Release\qas_stage35_benchmark.exe --suite tt --repeats 7
+.\build\current\Release\qas_stage35_benchmark.exe --suite fixed --leq-threshold 24 --leq-min-depth 4 --leq-min-duplicate-ratio 0.25
+.\build\current\Release\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode baseline --repeats 7
+.\build\current\Release\qas_stage35_benchmark.exe --suite fixed --depths 10 --eval-mode optimized --repeats 7
 ```
 
 The Stage 3.5 runner writes per-run and median rows, applies a hard timeout,
@@ -102,6 +108,9 @@ The debug state format starts with `side turn`, followed by eight lines:
 
 ```text
 QuantumShogiAnimal/
+|-- build/                    Ignored versioned build trees (`build/<version>`)
+|   |-- current/              Reusable active working-tree build
+|   `-- <version>/            Preserved candidate or historical build
 |-- include/                  Public C++ headers, grouped by owning module
 |   |-- core/                 Domain types, configuration, state and shared timing
 |   |-- rules/                State transitions and legal-move API
@@ -126,7 +135,7 @@ QuantumShogiAnimal/
 |   |-- schemas/              JSON artifact schemas
 |   |-- tools/                Pipeline, analysis and reporting commands
 |   `-- versions/             Frozen accepted engine artifacts and registry
-|-- scripts/                  Windows entry points for evaluation workflows
+|-- scripts/                  Windows entry points for versioned builds and evaluation workflows
 |-- docs/                     Rules, architecture and development policies
 |-- CMakeLists.txt            Build targets and test registration
 |-- engine_config.json        Runtime profiles and engine defaults
@@ -136,8 +145,9 @@ QuantumShogiAnimal/
 Production dependency direction remains `core <- rules <- search`; `io` depends
 on `core` and `rules`, while `exact` integrates through the search extension
 boundary. `evaluation/` may consume production modules, but production code does
-not depend on evaluation orchestration. Generated directories such as `build/`,
-`reports/` and `local_reports/` are intentionally omitted from the source tree.
+not depend on evaluation orchestration. Generated directories such as `build/`, `reports/` and
+`local_reports/` are not version-controlled; `build/` is shown above only to document its
+required runtime layout.
 
 ## Evidence
 
@@ -157,7 +167,7 @@ All future candidates use the standardized system in
 
 ```powershell
 scripts\evaluate_built_candidate.bat ^
-  --candidate-exe "build\Release\qas.exe" ^
+  --candidate-exe "build\current\Release\qas.exe" ^
   --candidate-name "Stage 5.1" ^
   --change-category performance_only ^
   --profile strength_candidate

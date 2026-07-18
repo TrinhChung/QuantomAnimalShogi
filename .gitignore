@@ -1,6 +1,4 @@
 /build/
-/build_stage35*/
-/build_stage5/
 .cache/
 *.exe
 !evaluation/versions/*/qas.exe

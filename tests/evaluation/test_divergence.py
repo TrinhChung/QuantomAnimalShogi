@@ -5,14 +5,14 @@ import unittest
 from pathlib import Path
 
 from evaluation.tools.analyze_divergence import _reanalysis_classification, analyze_divergences
-from evaluation.tools.common import repository_root, sha256_file
+from evaluation.tools.common import default_build_directory, repository_root, sha256_file
 from evaluation.tools.corpus import load_corpus
 from evaluation.tools.referee import EngineSpec
 
 
 ROOT = repository_root()
-REFEREE = ROOT / "build" / "Release" / "qas_evaluation_referee.exe"
-BENCHMARK = ROOT / "build" / "Release" / "qas_evaluation_benchmark.exe"
+REFEREE = default_build_directory() / "Release" / "qas_evaluation_referee.exe"
+BENCHMARK = default_build_directory() / "Release" / "qas_evaluation_benchmark.exe"
 CONFIG = ROOT / "engine_config.json"
 
 
