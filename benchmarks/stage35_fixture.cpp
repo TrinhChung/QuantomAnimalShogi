@@ -41,6 +41,7 @@ bool has_immediate_win(const State& state, Terminal reason = Terminal::None) {
         if (!apply_move(successor, move, undo))
             continue;
         if ((successor.terminal == Terminal::Catch || successor.terminal == Terminal::Try) &&
+            successor.winner == side_index(state.side_to_move) &&
             (reason == Terminal::None || successor.terminal == reason)) {
             return true;
         }
@@ -162,11 +163,11 @@ State duplicate_hands_position() {
 }
 
 State near_catch_position() {
+    constexpr std::uint8_t kSouthGiraffeSquare = 4;
+    constexpr std::uint8_t kSouthLionSquare = 11;
+    constexpr std::uint8_t kNorthLionSquare = 1;
     State state = initial_state();
     state.board.fill(-1);
-    for (int piece = 0; piece < physical_piece_count; ++piece) {
-        state.pos[piece] = static_cast<std::uint8_t>(first_hand_slot + piece);
-    }
     state.mask[0] = bit(Animal::Giraffe);
     state.mask[1] = bit(Animal::Chick);
     state.mask[2] = bit(Animal::Elephant);
@@ -175,10 +176,17 @@ State near_catch_position() {
     state.mask[5] = bit(Animal::Chick);
     state.mask[6] = bit(Animal::Giraffe);
     state.mask[7] = bit(Animal::Elephant);
-    state.pos[0] = 4;
-    state.board[4] = 0;
-    state.pos[4] = 1;
-    state.board[1] = 4;
+    state.pos = {kSouthGiraffeSquare,
+                 first_hand_slot,
+                 first_hand_slot + 1,
+                 kSouthLionSquare,
+                 kNorthLionSquare,
+                 external_source_count - 3,
+                 external_source_count - 2,
+                 external_source_count - 1};
+    state.board[kSouthGiraffeSquare] = 0;
+    state.board[kSouthLionSquare] = 3;
+    state.board[kNorthLionSquare] = 4;
     state.side_to_move = Side::South;
     state.terminal = Terminal::None;
     state.winner = -1;

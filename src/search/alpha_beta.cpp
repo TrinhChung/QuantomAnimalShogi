@@ -189,6 +189,15 @@ int geometric_mobility(const State& state, Side side) {
     return result;
 }
 
+/// @brief Tests whether a terminal state was won by a selected side.
+/// @param state Terminal candidate state.
+/// @param side Side expected to be the winner.
+/// @return `true` for a Catch or Try credited to the selected side.
+bool is_terminal_win_for(const State& state, Side side) {
+    return (state.terminal == Terminal::Catch || state.terminal == Terminal::Try) &&
+           state.winner == side_index(side);
+}
+
 /// @brief Exhaustively tests pseudo-legal moves for an immediate Catch or Try.
 /// @param state Source state.
 /// @param side Side to install as the mover.
@@ -216,7 +225,7 @@ bool side_has_immediate_win(const State& state, Side side, EvalComponentProfile*
             ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_transition);
             applied = apply_move(copy, move, undo);
         }
-        if (applied && (copy.terminal == Terminal::Catch || copy.terminal == Terminal::Try)) {
+        if (applied && is_terminal_win_for(copy, side)) {
             return true;
         }
         {
@@ -565,7 +574,7 @@ int AlphaBetaEngine::evaluate_optimized(const State& state,
                 ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_transition);
                 applied = apply_move(copy, move, undo);
             }
-            if (applied && (copy.terminal == Terminal::Catch || copy.terminal == Terminal::Try))
+            if (applied && is_terminal_win_for(copy, side))
                 return true;
             if (applied)
                 undo_move(copy, undo);
@@ -668,8 +677,7 @@ int AlphaBetaEngine::move_order_score(const State& state,
     Undo undo;
     if (!apply_search_move(after, move, undo))
         return -2'000'000;
-    if (options_.immediate_win_ordering_enabled &&
-        (after.terminal == Terminal::Catch || after.terminal == Terminal::Try)) {
+    if (options_.immediate_win_ordering_enabled && is_terminal_win_for(after, state.side_to_move)) {
         return 1'500'000 + score;
     }
     const int before_lions = lion_candidate_count(state, after.side_to_move);

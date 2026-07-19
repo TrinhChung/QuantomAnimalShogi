@@ -191,8 +191,9 @@ void test_propagation_lut_matches_reference() {
 void test_catch() {
     qas::State state = exact_state();
     move_all_to_hands(state);
-    place(state, 0, 4);  // South giraffe
-    place(state, 4, 1);  // North confirmed lion
+    place(state, 0, 4);   // South giraffe
+    place(state, 3, 11);  // South Lion remains on the board in an ongoing position.
+    place(state, 4, 1);   // North confirmed lion
     state.side_to_move = qas::Side::South;
     qas::recompute_hash(state);
 
@@ -209,6 +210,7 @@ void test_capture_collapse_and_demotion() {
     qas::State state = exact_state();
     move_all_to_hands(state);
     place(state, 0, 4);
+    place(state, 3, 11);
     place(state, 4, 1);
     state.mask[4] = qas::bit(qas::Animal::Chick) | qas::bit(qas::Animal::Lion);
     state.mask[5] = qas::bit(qas::Animal::Chick) | qas::bit(qas::Animal::Lion);
@@ -227,16 +229,19 @@ void test_capture_collapse_and_demotion() {
     demote.mask[4] = qas::bit(qas::Animal::Hen);
     demote.mask[5] = qas::bit(qas::Animal::Lion);
     place(demote, 0, 4);
+    place(demote, 3, 11);
     place(demote, 4, 1);
     qas::recompute_hash(demote);
     check(qas::apply_move(demote, qas::Move{0, 4, 1}, undo), "capturing Hen applies");
     check(demote.mask[4] == qas::bit(qas::Animal::Chick), "captured Hen demotes to Chick");
 }
 
-void test_promotion_try_and_draw() {
+void test_promotion_delayed_try_and_draw() {
     qas::State promotion = exact_state();
     move_all_to_hands(promotion);
     place(promotion, 1, 3);
+    place(promotion, 3, 11);
+    place(promotion, 4, 8);
     qas::recompute_hash(promotion);
     qas::Undo undo;
     check(qas::apply_move(promotion, qas::Move{1, 3, 0}, undo),
@@ -247,20 +252,39 @@ void test_promotion_try_and_draw() {
     move_all_to_hands(try_state);
     try_state.mask[0] = qas::bit(qas::Animal::Giraffe) | qas::bit(qas::Animal::Lion);
     try_state.mask[3] = qas::bit(qas::Animal::Giraffe) | qas::bit(qas::Animal::Lion);
-    place(try_state, 3, 3);
+    place(try_state, 0, 11);
+    place(try_state, 3, 3);  // South Lion candidate enters its target back rank.
+    place(try_state, 4, 8);  // North Lion remains on the board in an ongoing position.
+    place(try_state, 6, 2);  // North Giraffe has a non-capturing reply.
+    try_state.turn = qas::kTurnLimit - 2;
     qas::recompute_hash(try_state);
     check(qas::apply_move(try_state, qas::Move{3, 3, 0}, undo),
-          "Lion candidate can enter back rank");
+          "Lion candidate can enter the back rank on turn 255");
+    check(try_state.terminal == qas::Terminal::None,
+          "entering the back rank does not end the game before the opponent replies");
+    check(!qas::is_immediate_winning_move(try_state, qas::Move{6, 2, 5}),
+          "a reply that concedes the pending Try is not a win for the replying player");
+    check(qas::apply_move(try_state, qas::Move{6, 2, 5}, undo),
+          "opponent can make a non-capturing reply to a pending Try");
     check(try_state.terminal == qas::Terminal::Try && try_state.winner == 0,
-          "safe piece that can be Lion wins by Try");
+          "surviving Lion candidate wins by Try after the opponent reply");
+    check(try_state.turn == qas::kTurnLimit,
+          "delayed Try is recognized on the turn-limit transition");
 
-    qas::State defended = undo.previous;
-    place(defended, 6, 1);  // North giraffe can capture square 0 horizontally.
+    qas::State defended = exact_state();
+    move_all_to_hands(defended);
+    place(defended, 3, 3);
+    place(defended, 4, 8);
+    place(defended, 6, 1);  // North Giraffe can capture square 0 horizontally.
     qas::recompute_hash(defended);
     check(qas::apply_move(defended, qas::Move{3, 3, 0}, undo),
-          "defended Lion-candidate move is legal");
-    check(defended.terminal == qas::Terminal::None,
-          "Try does not succeed when the candidate can be captured immediately");
+          "defended Lion enters the back rank without an immediate terminal result");
+    check(qas::is_immediate_winning_move(defended, qas::Move{6, 1, 0}),
+          "capturing a pending Try Lion is an immediate win for the responder");
+    check(qas::apply_move(defended, qas::Move{6, 1, 0}, undo),
+          "opponent can answer a pending Try by capturing the Lion");
+    check(defended.terminal == qas::Terminal::Catch && defended.winner == 1,
+          "capturing the pending Try piece wins by Catch for the responder");
 
     qas::State draw = exact_state();
     draw.turn = qas::kTurnLimit - 1;
@@ -294,6 +318,7 @@ void test_hand_drop_illegal_transition_and_terminal_priority() {
     qas::State priority = exact_state();
     move_all_to_hands(priority);
     place(priority, 0, 4);
+    place(priority, 3, 11);
     place(priority, 4, 1);
     priority.turn = qas::kTurnLimit - 1;
     qas::recompute_hash(priority);
@@ -375,7 +400,7 @@ int main() {
     test_propagation_lut_matches_reference();
     test_catch();
     test_capture_collapse_and_demotion();
-    test_promotion_try_and_draw();
+    test_promotion_delayed_try_and_draw();
     test_hand_drop_illegal_transition_and_terminal_priority();
     test_turn_is_hashed_and_parse_roundtrip();
     test_seeded_playout_full_unwind();

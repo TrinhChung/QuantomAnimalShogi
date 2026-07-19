@@ -559,20 +559,44 @@ int unused_hand_slot(const State& state, int excluded_piece) {
     return -1;
 }
 
-/// @brief Counts Lion-capable pieces sharing a target piece's immutable origin.
+/// @brief Tests whether a player owns any piece that can still be Lion.
 /// @param state Source state.
-/// @param target_piece Piece whose origin selects the group.
-/// @return Number of Lion candidates in that origin group.
-int lion_candidates_for_origin(const State& state, int target_piece) {
-    const Side origin =
-        originated_from(state, target_piece, Side::South) ? Side::South : Side::North;
-    int count = 0;
+/// @param owner Player whose currently owned pieces are inspected.
+/// @return `true` when at least one owned piece retains the Lion possibility.
+bool has_lion_candidate_owned_by(const State& state, Side owner) {
     for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (originated_from(state, piece, origin) && contains(state.mask[piece], Animal::Lion)) {
-            ++count;
+        if (owned_by(state, piece, owner) && contains(state.mask[piece], Animal::Lion))
+            return true;
+    }
+    return false;
+}
+
+/// @brief Tests whether a player owns a hand piece that can still be Lion.
+/// @param state Source state.
+/// @param owner Player whose hand pieces are inspected.
+/// @return `true` when a Lion candidate is present in that player's hand.
+bool has_hand_lion_candidate_owned_by(const State& state, Side owner) {
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (owned_by(state, piece, owner) && is_hand_position(state.pos[piece]) &&
+            contains(state.mask[piece], Animal::Lion)) {
+            return true;
         }
     }
-    return count;
+    return false;
+}
+
+/// @brief Tests the organizer's delayed Try condition for one player.
+/// @param state Source state after the opponent has completed a reply.
+/// @param side Player whose Lion candidates are inspected.
+/// @return `true` when an owned Lion candidate remains on the opponent-facing back rank.
+bool has_surviving_try_candidate(const State& state, Side side) {
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (owned_by(state, piece, side) && state.pos[piece] < board_size &&
+            is_back_rank(state.pos[piece], side) && contains(state.mask[piece], Animal::Lion)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 class ApplyMoveMetricsRecorder {
@@ -648,16 +672,12 @@ bool apply_move_origin_effects(State& state, const Move& move, Side mover) {
 /// @param state State being transitioned.
 /// @param move Applied move.
 /// @param mover Side taking ownership of a captured piece.
-/// @param catch_win Receives whether the captured piece was the final Lion candidate.
 /// @return `false` only when no hand slot is available for a capture.
-bool capture_destination_piece(State& state, const Move& move, Side mover, bool& catch_win) {
+bool capture_destination_piece(State& state, const Move& move, Side mover) {
     const int captured = state.board[move.to];
     if (captured < 0)
         return true;
 
-    // Catch is determined from the identity mask before capture removes Lion from that mask.
-    catch_win = contains(state.mask[captured], Animal::Lion) &&
-                lion_candidates_for_origin(state, captured) == 1;
     const int hand_slot = unused_hand_slot(state, captured);
     if (hand_slot < 0)
         return false;
@@ -672,21 +692,16 @@ bool capture_destination_piece(State& state, const Move& move, Side mover, bool&
         captured_mask &= static_cast<Mask>(~bit(Animal::Hen));
         captured_mask |= bit(Animal::Chick);
     }
-    if (!catch_win)
-        captured_mask &= static_cast<Mask>(~bit(Animal::Lion));
     state.mask[captured] = captured_mask;
     return true;
 }
 
-/// @brief Places the mover, increments the turn and switches side to move.
+/// @brief Places the moving physical piece in both board representations.
 /// @param state State being transitioned.
 /// @param move Applied move.
-/// @param mover Side that made the move.
-void complete_board_transition(State& state, const Move& move, Side mover) {
+void place_moving_piece(State& state, const Move& move) {
     state.board[move.to] = static_cast<std::int8_t>(move.piece);
     state.pos[move.piece] = move.to;
-    ++state.turn;
-    state.side_to_move = opposite(mover);
 }
 
 /// @brief Propagates a transitioned state with optional timing metrics.
@@ -708,67 +723,53 @@ bool propagate_transition(State& state, PropagationMode mode, RuleMetrics* metri
     return succeeded;
 }
 
+/// @brief Applies the organizer's captured-Lion uncertainty rule and repropagates changes.
+/// @param state Transitioned state after the first fixed-point propagation.
+/// @param mover Player that made the capture candidate move.
+/// @param mode Propagation implementation.
+/// @param metrics Optional metrics sink.
+/// @return `false` when removing refuted Lion candidates creates a contradiction.
+bool resolve_captured_lion_candidates(State& state,
+                                      Side mover,
+                                      PropagationMode mode,
+                                      RuleMetrics* metrics) {
+    if (!has_lion_candidate_owned_by(state, opposite(mover)))
+        return true;
+
+    bool changed = false;
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (!owned_by(state, piece, mover) || !is_hand_position(state.pos[piece]) ||
+            !contains(state.mask[piece], Animal::Lion)) {
+            continue;
+        }
+        state.mask[piece] &= static_cast<Mask>(~bit(Animal::Lion));
+        if (state.mask[piece] == 0)
+            return false;
+        changed = true;
+    }
+    return !changed || propagate_transition(state, mode, metrics);
+}
+
 /// @brief Executes the ordered move-transition pipeline.
 /// @param state State to mutate and restore on failure.
 /// @param move Candidate move.
 /// @param undo Receives the complete input state.
 /// @param mode Propagation implementation.
-/// @param detect_try Whether Try terminal detection is enabled.
 /// @param metrics Optional rule metrics sink.
 /// @return `true` when the complete transition succeeds.
-bool apply_move_internal(State& state,
-                         const Move& move,
-                         Undo& undo,
-                         PropagationMode mode,
-                         bool detect_try,
-                         RuleMetrics* metrics);
+bool apply_move_internal(
+    State& state, const Move& move, Undo& undo, PropagationMode mode, RuleMetrics* metrics);
 
-/// @brief Tests whether the side to move has a legal immediate capture of a piece.
-/// @param state Source state.
-/// @param target_piece Physical piece that must be captured.
-/// @param mode Propagation implementation used for replies.
-/// @param metrics Optional metrics sink for reply transitions.
-/// @return `true` when at least one legal reply captures the target.
-bool can_capture_piece_immediately(const State& state,
-                                   int target_piece,
-                                   PropagationMode mode,
-                                   RuleMetrics* metrics) {
-    if (state.pos[target_piece] >= board_size)
-        return false;
-    for (const Move& reply : generate_pseudo_legal_moves(state)) {
-        if (reply.to != state.pos[target_piece])
-            continue;
-        State copy = state;
-        Undo undo;
-        if (apply_move_internal(copy, reply, undo, mode, false, metrics))
-            return true;
-    }
-    return false;
-}
-
-/// @brief Applies official Catch, Try and draw terminal priority.
+/// @brief Applies the organizer's delayed Try, Catch and draw terminal priority.
 /// @param state Transitioned and propagated state to update.
-/// @param move Applied move.
 /// @param mover Side that made the move.
-/// @param catch_win Whether capture removed the final Lion candidate.
-/// @param detect_try Whether Try detection is enabled.
-/// @param mode Propagation implementation used for defensive replies.
-/// @param metrics Optional metrics sink for defensive replies.
-void update_terminal_status(State& state,
-                            const Move& move,
-                            Side mover,
-                            bool catch_win,
-                            bool detect_try,
-                            PropagationMode mode,
-                            RuleMetrics* metrics) {
-    // Official terminal priority is Catch, then Try, then the turn-limit draw.
-    if (catch_win) {
-        state.terminal = Terminal::Catch;
-        state.winner = static_cast<std::int8_t>(side_index(mover));
-    } else if (detect_try && contains(state.mask[move.piece], Animal::Lion) &&
-               is_back_rank(move.to, mover) &&
-               !can_capture_piece_immediately(state, move.piece, mode, metrics)) {
+void update_terminal_status(State& state, Side mover) {
+    // The organizer checks a Try that survived the reply before Catch and the turn-limit draw.
+    if (has_surviving_try_candidate(state, state.side_to_move)) {
         state.terminal = Terminal::Try;
+        state.winner = static_cast<std::int8_t>(side_index(state.side_to_move));
+    } else if (has_hand_lion_candidate_owned_by(state, mover)) {
+        state.terminal = Terminal::Catch;
         state.winner = static_cast<std::int8_t>(side_index(mover));
     } else if (state.turn >= kTurnLimit) {
         state.terminal = Terminal::Draw;
@@ -792,12 +793,8 @@ void recompute_transition_hash(State& state, RuleMetrics* metrics) {
     metrics->hash_recompute_ms += elapsed_milliseconds(hash_begin, hash_end);
 }
 
-bool apply_move_internal(State& state,
-                         const Move& move,
-                         Undo& undo,
-                         PropagationMode mode,
-                         bool detect_try,
-                         RuleMetrics* metrics) {
+bool apply_move_internal(
+    State& state, const Move& move, Undo& undo, PropagationMode mode, RuleMetrics* metrics) {
     ApplyMoveMetricsRecorder metrics_recorder(metrics);
     undo.previous = state;
     auto reject = [&state, &undo, &metrics_recorder]() {
@@ -808,17 +805,21 @@ bool apply_move_internal(State& state,
         return reject();
 
     const Side mover = state.side_to_move;
-    // Keep these phases ordered: identity collapse/promotion, capture, placement, propagation,
-    // terminal detection, and finally hashing.
+    // Keep these phases ordered: movement collapse/promotion, capture, placement, propagation,
+    // captured-Lion resolution, terminal detection, and finally hashing.
     if (!apply_move_origin_effects(state, move, mover))
         return reject();
-    bool catch_win = false;
-    if (!capture_destination_piece(state, move, mover, catch_win))
+    if (!capture_destination_piece(state, move, mover))
         return reject();
-    complete_board_transition(state, move, mover);
+    place_moving_piece(state, move);
     if (!propagate_transition(state, mode, metrics))
         return reject();
-    update_terminal_status(state, move, mover, catch_win, detect_try, mode, metrics);
+    if (move.from < board_size && !resolve_captured_lion_candidates(state, mover, mode, metrics)) {
+        return reject();
+    }
+    ++state.turn;
+    state.side_to_move = opposite(mover);
+    update_terminal_status(state, mover);
     recompute_transition_hash(state, metrics);
     return metrics_recorder.finish(true);
 }
@@ -864,8 +865,7 @@ void filter_legal_candidates(const State& state,
     State copy = state;
     for (const Move& move : candidates) {
         Undo undo;
-        if (apply_move_internal(
-                copy, move, undo, context.propagation_mode, true, context.metrics)) {
+        if (apply_move_internal(copy, move, undo, context.propagation_mode, context.metrics)) {
             legal.push_back(move);
         } else if (context.metrics != nullptr) {
             ++context.metrics->pseudo_moves_rejected;
@@ -897,12 +897,12 @@ void generate_legal_moves_impl(const State& state,
 }  // namespace
 
 bool apply_move(State& state, const Move& move, Undo& undo, PropagationMode mode) {
-    return apply_move_internal(state, move, undo, mode, true, nullptr);
+    return apply_move_internal(state, move, undo, mode, nullptr);
 }
 
 bool apply_move_profiled(
     State& state, const Move& move, Undo& undo, RuleMetrics& metrics, PropagationMode mode) {
-    return apply_move_internal(state, move, undo, mode, true, &metrics);
+    return apply_move_internal(state, move, undo, mode, &metrics);
 }
 
 void undo_move(State& state, const Undo& undo) {
@@ -976,11 +976,13 @@ void generate_legal_moves_profiled(const State& state,
 }
 
 bool is_immediate_winning_move(const State& state, const Move& move) {
+    const Side mover = state.side_to_move;
     State copy = state;
     Undo undo;
     if (!apply_move(copy, move, undo))
         return false;
-    return copy.terminal == Terminal::Catch || copy.terminal == Terminal::Try;
+    return (copy.terminal == Terminal::Catch || copy.terminal == Terminal::Try) &&
+           copy.winner == side_index(mover);
 }
 
 }  // namespace qas

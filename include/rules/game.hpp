@@ -211,10 +211,10 @@ void generate_legal_moves_profiled(const State& state,
 /// @return `true` when at least one owned board piece can reach the square.
 bool is_square_attacked(const State& state, int square, Side by_side);
 
-/// @brief Tests whether a legal move immediately produces Catch or Try.
+/// @brief Tests whether a legal move immediately wins by Catch or Try for its mover.
 /// @param state Source state.
 /// @param move Candidate move.
-/// @return `true` when applying the move ends in a win.
+/// @return `true` when applying the move ends with the current side as winner.
 bool is_immediate_winning_move(const State& state, const Move& move);
 
 /// @brief Parses the deterministic debug state text format.

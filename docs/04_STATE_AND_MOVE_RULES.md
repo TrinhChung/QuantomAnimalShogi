@@ -23,6 +23,21 @@ Good: decode once to a domain `Move`, validate through rules, and operate only o
 
 The rule pipeline must document and test its exact order. Constraint propagation reaches a fixed point before canonicalization or evaluation. `apply_move` records enough information for `undo_move` to restore byte-for-byte logical state, equality, and the identical Zobrist key.
 
+The organizer's Rust engine defines the terminal and captured-identity order:
+
+1. Constrain the moving piece, demote a captured Hen, transfer the captured piece, promote a
+   moving Chick on the back rank, and propagate identity constraints.
+2. When the opponent still owns any Lion candidate, remove Lion from every Lion-capable hand
+   piece owned by the mover, then propagate again.
+3. Switch the side to move and increment the turn.
+4. Award Try only when the new side to move already has an owned Lion candidate on its target
+   back rank. This means entering the rank starts a pending Try; the opponent receives one reply.
+5. Otherwise award Catch when the previous mover owns a Lion-capable hand piece, then apply the
+   256-turn draw if neither win condition applies.
+
+Terminal priority after a reply is therefore surviving pending Try, Catch by the replying mover,
+then the turn-limit draw. Do not replace the delayed Try rule with an immediate attack-map test.
+
 Required invariant test:
 
 ```text

@@ -1,9 +1,11 @@
 #include "stage35_fixture.hpp"
 
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "io/protocol.hpp"
 
@@ -21,7 +23,13 @@ void check(bool condition, const std::string& message) {
 }  // namespace
 
 int main() {
-    const auto fixtures = qas::benchmark::load_stage35_fixtures("benchmarks/fixtures/stage35");
+    std::vector<qas::benchmark::Fixture> fixtures;
+    try {
+        fixtures = qas::benchmark::load_stage35_fixtures("benchmarks/fixtures/stage35");
+    } catch (const std::exception& error) {
+        std::cerr << "FAIL: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
     check(fixtures.size() == 110, "Stage 3.5 fixture set has 10 required plus 100 random states");
     std::map<std::string, int> category_counts;
     for (const auto& fixture : fixtures) {

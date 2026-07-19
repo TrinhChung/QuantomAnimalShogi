@@ -9,7 +9,8 @@ Before dependent features are merged, provide tests for:
 - incremental hash versus full recomputation;
 - propagation fixed point (running it twice changes nothing);
 - no empty mask after valid propagation;
-- Catch terminal, Try terminal, and draw exactly at turn 256;
+- Catch terminal, delayed Try after one opponent reply, and draw exactly at turn 256;
+- surviving pending Try priority over Catch/draw and Catch priority over the turn-limit draw;
 - seeded random playout invariants with full unwind;
 - perft-style node counts from fixed named positions;
 - search always returning a legal move;
