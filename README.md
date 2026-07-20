@@ -14,6 +14,19 @@ Search is delivered in two verified stages:
 
 No ML, GPU, network, paid dependency or background worker is used.
 
+## Web solo
+
+The companion app in [`quantum-animal-shogi/`](quantum-animal-shogi/README.md) supports exactly
+two local modes: human versus engine and engine versus engine. Lightweight packaged bots run in
+Rust/WASM or JavaScript. A local Node bridge exposes allowlisted historical C++ Stage binaries to
+the same bot selector. No Python runtime, database, or tournament service is required.
+
+From the repository root, install missing dependencies and start the development server with:
+
+```powershell
+scripts\run_web.ps1
+```
+
 ## Build
 
 ```powershell
@@ -127,6 +140,7 @@ QuantumShogiAnimal/
 |-- tests/                    Deterministic C++ regression and invariant tests
 |   `-- evaluation/           Python tests for the evaluation framework
 |-- benchmarks/               Repeatable search, memory and self-play benchmarks
+|-- quantum-animal-shogi/     Static Vue + Rust/WASM solo app
 |-- evaluation/               External version-evaluation orchestration
 |   |-- cmake/                Evaluation build-manifest generation
 |   |-- config/               Profiles and acceptance policy

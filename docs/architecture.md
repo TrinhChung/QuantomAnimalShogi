@@ -83,3 +83,16 @@ Two application-boundary executables link `qas_core`:
 The dependency remains one-way: evaluation tools may depend on core, rules, search, exact, and IO;
 production modules never depend on evaluation code. Contest stdout and search semantics are
 unchanged.
+
+## Web solo boundary
+
+`quantum-animal-shogi/` is a local companion application, not a dependency of the C++ contest
+engine or evaluation pipeline. It contains a small Rust reference core exposed through WASM and a
+Vue application boundary. The browser owns local match orchestration for human-versus-engine and
+engine-versus-engine play. Packaged Alpha-Beta and random bots run without Python. An allowlisted
+Node bridge is the only native boundary and may launch immutable C++ Stage binaries; it cannot
+accept arbitrary executable paths. There is no database, tournament, training, or Python runtime.
+
+Historical standalone `qas.exe` files are archival artifacts under `evaluation/versions/legacy-*`.
+The local bridge discovers only explicitly configured artifacts and validates every returned action
+against the browser-generated official action mask.
