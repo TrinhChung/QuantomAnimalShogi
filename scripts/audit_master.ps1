@@ -20,7 +20,7 @@ $protectedContainers = @('mysql_db', 'kokoro-fastapi-cpu-kokoro-tts-1', 'qas-mas
 Write-Host '--- Running services ---'
 & ssh -o BatchMode=yes $SshHost systemctl --no-pager --plain --state=running --type=service
 Write-Host '--- Containers ---'
-& ssh -o BatchMode=yes $SshHost docker ps --format '{{.Names}} {{.Image}} {{.Status}}'
+& ssh -o BatchMode=yes $SshHost docker ps
 Write-Host '--- Largest processes ---'
 & ssh -o BatchMode=yes $SshHost ps -eo pid,comm,%cpu,%mem,rss,args --sort=-rss
 
