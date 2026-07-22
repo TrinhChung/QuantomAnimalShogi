@@ -33,7 +33,18 @@ $cacheRoot = Join-Path $repositoryRoot '.cache\database-sync'
 New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
 $dumpPath = Join-Path $cacheRoot ("qas-{0}.sql" -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))
 $remoteScriptPath = Join-Path $cacheRoot ("dump-{0}.sh" -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))
-$mysqlCommand = (Get-Command mysql -ErrorAction Stop).Source
+$mysqlTool = Get-Command mysql -ErrorAction SilentlyContinue
+$mysqlCommand = if ($mysqlTool) { $mysqlTool.Source } else { $null }
+if (-not $mysqlCommand) {
+    $mysqlCandidates = @(
+        (Join-Path $env:ProgramFiles 'MySQL\MySQL Server 8.4\bin\mysql.exe'),
+        (Join-Path $env:ProgramFiles 'MySQL\MySQL Server 8.0\bin\mysql.exe')
+    )
+    $mysqlCommand = $mysqlCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
+if (-not $mysqlCommand) {
+    throw 'mysql.exe was not found in PATH or a standard MySQL Server installation'
+}
 $remoteDump = @'
 set -euo pipefail
 source /etc/qas/backup.env
@@ -42,7 +53,11 @@ docker exec -e MYSQL_PWD="${QAS_BACKUP_PASSWORD}" "${QAS_MYSQL_CONTAINER}" \
   --routines --triggers --events --set-gtid-purged=OFF --add-drop-table \
   "${QAS_BACKUP_DATABASE}"
 '@
-Set-Content -LiteralPath $remoteScriptPath -Value $remoteDump -Encoding Ascii
+[System.IO.File]::WriteAllText(
+    $remoteScriptPath,
+    ($remoteDump -replace "`r", ''),
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 try {
     $sshArguments = @('-o', 'BatchMode=yes', $SshHost, 'bash', '-s')

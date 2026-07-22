@@ -120,7 +120,7 @@ ln -sfn /etc/nginx/sites-available/qas-cluster.conf /etc/nginx/sites-enabled/qas
 nginx -t
 systemctl reload nginx
 
-echo "QAS dashboard: http://$(hostname -I | awk '{print $1}'):8331/"
-echo "Grafana:       http://$(hostname -I | awk '{print $1}'):8331/grafana/"
+echo "QAS dashboard SSH target: http://127.0.0.1:8331/"
+echo "Grafana SSH target:       http://127.0.0.1:8331/grafana/"
 echo "Secrets remain root-readable under ${environment_directory}."
 docker compose -f "${deploy_directory}/docker-compose.yml" ps
