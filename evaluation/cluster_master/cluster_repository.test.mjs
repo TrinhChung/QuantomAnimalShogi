@@ -164,6 +164,13 @@ test("an empty Redis sorted set returns no job", async () => {
   assert.equal(await queue.pop(), null);
 });
 
+test("Redis pop returns the job identifier from the current client shape", async () => {
+  const queue = new RedisClusterQueue({
+    zPopMin: async () => ({ value: "job-one", score: 1 }),
+  });
+  assert.equal(await queue.pop(), "job-one");
+});
+
 test("repository state accepts a bounded result limit", async () => {
   const repository = new ClusterRepository({ query: async () => [[]] });
   assert.deepEqual(await repository.state(100), { workers: [], jobs: [] });
