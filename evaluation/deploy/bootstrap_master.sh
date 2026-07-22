@@ -18,27 +18,19 @@ mysql_container="${QAS_MYSQL_CONTAINER:-mysql_db}"
 mkdir -p "${environment_directory}"
 chmod 700 "${environment_directory}"
 
+mysql_root_password="$(
+  docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${mysql_container}" \
+    | sed -n 's/^MYSQL_ROOT_PASSWORD=//p' \
+    | head -n 1
+)"
+if [[ -z "${mysql_root_password}" ]]; then
+  echo "MYSQL_ROOT_PASSWORD was not found in ${mysql_container}" >&2
+  exit 2
+fi
+
 if [[ ! -f "${cluster_environment}" ]]; then
-  mysql_root_password="$(
-    docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${mysql_container}" \
-      | sed -n 's/^MYSQL_ROOT_PASSWORD=//p' \
-      | head -n 1
-  )"
-  if [[ -z "${mysql_root_password}" ]]; then
-    echo "MYSQL_ROOT_PASSWORD was not found in ${mysql_container}" >&2
-    exit 2
-  fi
   database_password="$(openssl rand -hex 24)"
   cluster_token="$(openssl rand -hex 32)"
-  docker exec -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
-    mysql -uroot --protocol=socket <<SQL
-CREATE DATABASE IF NOT EXISTS quantum_animal_shogi
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE USER IF NOT EXISTS 'qas_cluster'@'%' IDENTIFIED BY '${database_password}';
-ALTER USER 'qas_cluster'@'%' IDENTIFIED BY '${database_password}';
-GRANT ALL PRIVILEGES ON quantum_animal_shogi.* TO 'qas_cluster'@'%';
-FLUSH PRIVILEGES;
-SQL
   cat >"${cluster_environment}" <<EOF
 QAS_DB_HOST=127.0.0.1
 QAS_DB_PORT=3306
@@ -54,20 +46,23 @@ EOF
   chmod 600 "${cluster_environment}"
 fi
 
-if [[ ! -f "${backup_environment}" ]]; then
-  mysql_root_password="$(
-    docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${mysql_container}" \
-      | sed -n 's/^MYSQL_ROOT_PASSWORD=//p' \
-      | head -n 1
-  )"
-  backup_password="$(openssl rand -hex 24)"
-  docker exec -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
-    mysql -uroot --protocol=socket <<SQL
-CREATE USER IF NOT EXISTS 'qas_backup'@'%' IDENTIFIED BY '${backup_password}';
-ALTER USER 'qas_backup'@'%' IDENTIFIED BY '${backup_password}';
-GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES ON quantum_animal_shogi.* TO 'qas_backup'@'%';
+database_password="$(sed -n 's/^QAS_DB_PASSWORD=//p' "${cluster_environment}" | head -n 1)"
+if [[ -z "${database_password}" ]]; then
+  echo "QAS_DB_PASSWORD is missing from ${cluster_environment}" >&2
+  exit 2
+fi
+docker exec -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
+  mysql -uroot --protocol=socket <<SQL
+CREATE DATABASE IF NOT EXISTS quantum_animal_shogi
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER IF NOT EXISTS 'qas_cluster'@'%' IDENTIFIED BY '${database_password}';
+ALTER USER 'qas_cluster'@'%' IDENTIFIED BY '${database_password}';
+GRANT ALL PRIVILEGES ON quantum_animal_shogi.* TO 'qas_cluster'@'%';
 FLUSH PRIVILEGES;
 SQL
+
+if [[ ! -f "${backup_environment}" ]]; then
+  backup_password="$(openssl rand -hex 24)"
   cat >"${backup_environment}" <<EOF
 QAS_BACKUP_USER=qas_backup
 QAS_BACKUP_PASSWORD=${backup_password}
@@ -76,6 +71,19 @@ QAS_MYSQL_CONTAINER=${mysql_container}
 EOF
   chmod 600 "${backup_environment}"
 fi
+
+backup_password="$(sed -n 's/^QAS_BACKUP_PASSWORD=//p' "${backup_environment}" | head -n 1)"
+if [[ -z "${backup_password}" ]]; then
+  echo "QAS_BACKUP_PASSWORD is missing from ${backup_environment}" >&2
+  exit 2
+fi
+docker exec -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
+  mysql -uroot --protocol=socket <<SQL
+CREATE USER IF NOT EXISTS 'qas_backup'@'%' IDENTIFIED BY '${backup_password}';
+ALTER USER 'qas_backup'@'%' IDENTIFIED BY '${backup_password}';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES ON quantum_animal_shogi.* TO 'qas_backup'@'%';
+FLUSH PRIVILEGES;
+SQL
 
 cluster_token="$(sed -n 's/^QAS_CLUSTER_TOKEN=//p' "${cluster_environment}" | head -n 1)"
 if [[ -z "${cluster_token}" ]]; then
