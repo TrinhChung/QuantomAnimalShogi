@@ -7,10 +7,10 @@ external orchestration under `evaluation/` and the web application boundary. It 
 rules, search, or protocol logic out of their owning C++ modules.
 
 ```text
-Remote browser
-      |
+Remote browser / Windows worker
+      | encrypted SSH tunnels
       v
-phuong:8331 / Nginx
+phuong:127.0.0.1:8331 / Nginx
       |
       +--> QAS cluster API + static dashboard (127.0.0.1:8766)
       |          |                         |
@@ -21,7 +21,7 @@ phuong:8331 / Nginx
       +--> Grafana (127.0.0.1:3200) <-- Prometheus <-- node_exporter / QAS metrics
 
 Workers (phuong spare, Windows local, other SSH hosts)
-      |   HTTPS/API heartbeat, lease, result
+      |   SSH tunnel + HTTP/API heartbeat, lease, result
       +-------------------------------------> master
       |
       +--> Git fetch of the exact job commit --> build/<version> --> evaluation artifacts
@@ -70,14 +70,14 @@ the SSH remote; no GitHub password or token is written to the cluster environmen
 
 3. The first deployment creates the `quantum_animal_shogi` database, least-privilege application
    and backup users, `/etc/qas/*.env` secrets, QAS master/worker containers, Prometheus, Grafana,
-   and the Nginx listener on port 8331.
-4. Open `http://37.44.244.139:8331/` and enter the bearer token from `/etc/qas/cluster.env`.
-   Grafana is under `/grafana/`; its generated administrator password is in
+   and the localhost-only Nginx listener on port 8331.
+4. Run `scripts\open_cluster_dashboard.bat`, then enter the bearer token from
+   `/etc/qas/cluster.env`. Grafana is under `/grafana/`; its generated administrator password is in
    `/etc/qas/grafana.env`.
 
-Place TLS or a VPN in front of port 8331 before treating it as an Internet-facing control plane.
-MySQL and Redis must remain bound to localhost/private networking; workers communicate through the
-authenticated master API, not by opening those database ports.
+The control plane, Grafana, MySQL, and Redis remain bound to localhost/private networking. Remote
+dashboard and worker traffic crosses SSH tunnels, so bearer and Grafana credentials are not sent
+over public plaintext HTTP.
 
 ## Run a Windows slave
 
@@ -85,13 +85,12 @@ Use a dedicated worker workspace. The worker creates it automatically and never 
 developer checkout.
 
 ```powershell
-$env:QAS_CLUSTER_URL = 'http://37.44.244.139:8331'
 $env:QAS_CLUSTER_TOKEN = '<token from phuong>'
 $env:QAS_WORKER_WORKSPACE = 'D:\QASCluster\workspace'
 $env:QAS_WORKER_ID = 'windows-local-daytime'
 $env:QAS_WORKER_NAME = 'Windows local daytime'
 $env:QAS_WORKER_LABELS = 'os=windows,role=daytime-slave'
-scripts\cluster_worker.bat
+scripts\cluster_worker_via_ssh.bat
 ```
 
 The same command works on another Windows server. On Linux, run
@@ -100,8 +99,8 @@ make this PC a worker only while idle, persist the URL/token as user environment
 register the supplied low-priority task:
 
 ```powershell
-[Environment]::SetEnvironmentVariable('QAS_CLUSTER_URL', 'http://37.44.244.139:8331', 'User')
 [Environment]::SetEnvironmentVariable('QAS_CLUSTER_TOKEN', '<token from phuong>', 'User')
+[Environment]::SetEnvironmentVariable('QAS_WORKER_WORKSPACE', 'D:\QASCluster\workspace', 'User')
 scripts\register_cluster_worker_task.bat -IdleMinutes 10
 ```
 

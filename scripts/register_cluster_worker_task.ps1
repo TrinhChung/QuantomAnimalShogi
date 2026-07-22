@@ -9,15 +9,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if (-not [Environment]::GetEnvironmentVariable('QAS_CLUSTER_URL', 'User')) {
-    throw 'Set the user-level QAS_CLUSTER_URL before registering the task'
-}
 if (-not [Environment]::GetEnvironmentVariable('QAS_CLUSTER_TOKEN', 'User')) {
     throw 'Set the user-level QAS_CLUSTER_TOKEN before registering the task'
 }
 
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$workerBatch = Join-Path $repositoryRoot 'scripts\cluster_worker.bat'
+$workerBatch = Join-Path $repositoryRoot 'scripts\cluster_worker_via_ssh.bat'
 $escapedCommand = [System.Security.SecurityElement]::Escape("/d /c `"$workerBatch`"")
 $escapedUser = [System.Security.SecurityElement]::Escape(
     [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
