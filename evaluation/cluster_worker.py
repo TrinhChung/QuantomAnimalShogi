@@ -120,12 +120,29 @@ class ClusterWorker:
             "fixed_time_contest": ["--suite", "iterative", "--time-limits-ms", "3000,5000,25000", "--repeats", "3"],
             "diagnostic_telemetry": ["--suite", "fixed", "--depths", "6,7", "--repeats", "3"],
         }[profile]
+        result_directory = self.workspace.path / "local_reports" / "cluster" / job["id"]
+        fixture_directory = self.workspace.path / "benchmarks" / "fixtures" / "stage35"
+        output = result_directory / "benchmark.csv"
         log = self._run_process(
             job,
-            [str(artifacts.stage35_benchmark), *suite_arguments],
+            [
+                str(artifacts.stage35_benchmark),
+                "--generate-fixtures",
+                "--fixtures",
+                str(fixture_directory),
+                "--output",
+                str(output),
+                *suite_arguments,
+            ],
             self.workspace.path,
         )
-        return {"profile": profile, "logSha256": _sha256(log), "logTail": log.read_text(encoding="utf-8")[-100_000:]}
+        return {
+            "profile": profile,
+            "logSha256": _sha256(log),
+            "logTail": log.read_text(encoding="utf-8")[-100_000:],
+            "csvSha256": _sha256(output),
+            "benchmarkCsv": output.read_text(encoding="utf-8")[-500_000:],
+        }
 
     def _opponent_workspace(self, commit: str) -> GitWorkspace:
         path = self.arguments.workspace.parent / "opponents" / commit

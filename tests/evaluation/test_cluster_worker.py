@@ -6,7 +6,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from evaluation.cluster_worker_support import GitWorkspace, WorkerError, _kokoro_busy, _labels
+from evaluation.cluster_worker import ClusterWorker
+from evaluation.cluster_worker_support import (
+    BuildArtifacts,
+    GitWorkspace,
+    WorkerError,
+    _kokoro_busy,
+    _labels,
+)
 
 
 class ClusterWorkerTests(unittest.TestCase):
@@ -30,6 +37,32 @@ class ClusterWorkerTests(unittest.TestCase):
             workspace = GitWorkspace(Path(directory) / "worker", "https://example.invalid/repo.git")
             with self.assertRaisesRegex(WorkerError, "git commit is invalid"):
                 workspace.prepare("main")
+
+    def test_benchmark_generates_fixtures_and_returns_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worker = object.__new__(ClusterWorker)
+            worker.workspace = argparse.Namespace(path=root)
+            executable = root / "qas_stage35_benchmark"
+            executable.write_text("binary", encoding="utf-8")
+
+            def run_process(_: dict, command: list[str], __: Path) -> Path:
+                self.assertIn("--generate-fixtures", command)
+                output = Path(command[command.index("--output") + 1])
+                output.parent.mkdir(parents=True)
+                output.write_text("suite,elapsed_ms\nsmoke,1\n", encoding="utf-8")
+                log = output.parent / "worker.log"
+                log.write_text("benchmark complete\n", encoding="utf-8")
+                return log
+
+            worker._run_process = run_process
+            artifacts = BuildArtifacts(executable, executable, executable, executable)
+            result = worker._run_benchmark(
+                {"id": "job-one", "payload": {"profile": "infrastructure_smoke"}},
+                artifacts,
+            )
+            self.assertIn("smoke,1", result["benchmarkCsv"])
+            self.assertEqual(len(result["csvSha256"]), 64)
 
     @mock.patch("evaluation.cluster_worker_support._run_checked")
     def test_workspace_retries_an_empty_failed_clone(self, run_checked: mock.Mock) -> None:
