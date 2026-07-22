@@ -45,7 +45,8 @@ names.
 The `phuong` worker is limited to one CPU and 2304 MB, runs child work at low OS priority, and is
 labelled `shared_with_kokoro=true`. It does not claim a new Shogi job when either condition is true:
 
-- Redis contains `qas:resource:kokoro:busy` or any configured Kokoro queue key.
+- Redis contains `qas:resource:kokoro:busy` or a configured Kokoro queue key. The `phuong`
+  bootstrap watches the existing RQ queue `rq:queue:default` by default.
 - Kokoro's Docker CPU usage is at or above `QAS_KOKORO_CPU_THRESHOLD` (5% by default).
 
 The CPU probe makes the policy useful without modifying the existing Kokoro web API. For exact

@@ -39,11 +39,16 @@ QAS_DB_PASSWORD=${database_password}
 QAS_DB_NAME=quantum_animal_shogi
 QAS_DB_REQUIRED=true
 QAS_REDIS_URL=redis://127.0.0.1:6379
+QAS_KOKORO_QUEUE_KEYS=rq:queue:default
 QAS_CLUSTER_TOKEN=${cluster_token}
 QAS_CLUSTER_REQUIRED=true
 QAS_GIT_REMOTE_URL=git@github.com:TrinhChung/QuantomAnimalShogi.git
 EOF
   chmod 600 "${cluster_environment}"
+fi
+
+if ! grep -q '^QAS_KOKORO_QUEUE_KEYS=' "${cluster_environment}"; then
+  printf '%s\n' 'QAS_KOKORO_QUEUE_KEYS=rq:queue:default' >>"${cluster_environment}"
 fi
 
 database_password="$(sed -n 's/^QAS_DB_PASSWORD=//p' "${cluster_environment}" | head -n 1)"
