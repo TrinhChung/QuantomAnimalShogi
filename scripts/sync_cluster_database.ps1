@@ -18,6 +18,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if (-not $LocalUser) {
+    $LocalUser = [Environment]::GetEnvironmentVariable('QAS_LOCAL_DB_USER', 'User')
+}
+if ($null -eq $LocalPassword) {
+    $LocalPassword = [Environment]::GetEnvironmentVariable('QAS_LOCAL_DB_PASSWORD', 'User')
+}
 if (-not $LocalUser -or $null -eq $LocalPassword) {
     throw 'Set QAS_LOCAL_DB_USER and QAS_LOCAL_DB_PASSWORD before synchronizing'
 }
