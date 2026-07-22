@@ -186,7 +186,7 @@ export class ClusterRepository {
         workerKey,
       ],
     );
-    if (result.affectedRows !== 1) {
+    if (result.affectedRows < 1) {
       throw new Error("job lease is unavailable");
     }
     return this.getJob(publicId);

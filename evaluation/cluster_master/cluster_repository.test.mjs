@@ -176,6 +176,24 @@ test("repository state accepts a bounded result limit", async () => {
   assert.deepEqual(await repository.state(100), { workers: [], jobs: [] });
 });
 
+test("a multi-table heartbeat accepts all updated rows", async () => {
+  const pool = {
+    execute: async (statement) => {
+      if (statement.startsWith("UPDATE cluster_jobs")) {
+        return [{ affectedRows: 2 }];
+      }
+      return [[{ public_id: "job-one", status: "running" }]];
+    },
+  };
+  const repository = new ClusterRepository(pool);
+  const job = await repository.heartbeatJob(
+    "job-one",
+    "worker-one",
+    { stage: "running" },
+  );
+  assert.equal(job.status, "running");
+});
+
 test("an incompatible head job does not block eligible work behind it", async () => {
   const recovered = [];
   const pending = ["windows-only", "portable"];
