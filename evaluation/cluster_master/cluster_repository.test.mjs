@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ClusterCoordinator } from "./cluster_queue.mjs";
+import { ClusterCoordinator, RedisClusterQueue } from "./cluster_queue.mjs";
 import {
   validateJobSubmission,
   validateWorkerHeartbeat,
@@ -156,6 +156,11 @@ test("coordinator restores durable queued jobs into Redis", async () => {
   await coordinator.hydrate();
   assert.equal(coordinator.isHydrated, true);
   assert.deepEqual(recovered, [{ id: "job-one", priority: 100, createdMs: 7 }]);
+});
+
+test("an empty Redis sorted set returns no job", async () => {
+  const queue = new RedisClusterQueue({ zPopMin: async () => null });
+  assert.equal(await queue.pop(), null);
 });
 
 test("an incompatible head job does not block eligible work behind it", async () => {

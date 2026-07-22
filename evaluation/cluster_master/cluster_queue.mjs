@@ -26,7 +26,7 @@ export class RedisClusterQueue {
 
   async pop() {
     const entries = await this.client.zPopMin(queueKey, 1);
-    return entries[0]?.value ?? null;
+    return entries?.[0]?.value ?? null;
   }
 
   async recover(entries) {
