@@ -8,7 +8,7 @@ param(
     [ValidatePattern('^/[a-zA-Z0-9._/-]+$')]
     [string]$RemoteRepository = '/opt/quantum-animal-shogi',
 
-    [string]$GitUrl = 'https://github.com/TrinhChung/QuantomAnimalShogi.git'
+    [string]$GitUrl = 'git@github.com:TrinhChung/QuantomAnimalShogi.git'
 )
 
 Set-StrictMode -Version Latest

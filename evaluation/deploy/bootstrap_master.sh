@@ -49,7 +49,7 @@ QAS_DB_REQUIRED=true
 QAS_REDIS_URL=redis://127.0.0.1:6379
 QAS_CLUSTER_TOKEN=${cluster_token}
 QAS_CLUSTER_REQUIRED=true
-QAS_GIT_REMOTE_URL=https://github.com/TrinhChung/QuantomAnimalShogi.git
+QAS_GIT_REMOTE_URL=git@github.com:TrinhChung/QuantomAnimalShogi.git
 EOF
   chmod 600 "${cluster_environment}"
 fi

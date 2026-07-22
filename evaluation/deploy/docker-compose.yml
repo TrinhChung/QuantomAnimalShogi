@@ -27,6 +27,7 @@ services:
       QAS_CLUSTER_URL: http://127.0.0.1:8766
       QAS_KOKORO_CONTAINER: kokoro-fastapi-cpu-kokoro-tts-1
       QAS_KOKORO_CPU_THRESHOLD: "5"
+      GIT_SSH_COMMAND: ssh -i /run/secrets/qas_git_key -o IdentitiesOnly=yes
       QAS_WORKER_CAPABILITIES: git_update,benchmark,tournament
       QAS_WORKER_ID: phuong-master-spare
       QAS_WORKER_LABELS: shared_with_kokoro=true,os=linux,role=master-spare
@@ -40,6 +41,8 @@ services:
     volumes:
       - qas_worker_data:/var/lib/qas-worker
       - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.ssh/git_login:/run/secrets/qas_git_key:ro
+      - /root/.ssh/known_hosts:/root/.ssh/known_hosts:ro
 
   prometheus:
     image: prom/prometheus:v3.5.0

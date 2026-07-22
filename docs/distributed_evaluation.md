@@ -57,6 +57,8 @@ the Shogi job started. Other slave machines do not pause because they do not sha
 
 The deployment uses Docker because `phuong` currently has host Node 18 and no CMake. It does not
 replace or restart the existing Kokoro, MySQL, or Redis services.
+The existing `/root/.ssh/git_login` deploy key is mounted read-only into the worker, and Git uses
+the SSH remote; no GitHub password or token is written to the cluster environment.
 
 1. Commit and push the cluster change. Deployment refuses a commit that is not on `origin`.
 2. From the repository root, deploy the exact commit:
