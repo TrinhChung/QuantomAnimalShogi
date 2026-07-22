@@ -1,4 +1,5 @@
 import {
+  boundedInteger,
   parseJson,
   validateJobSubmission,
   validateWorkerHeartbeat,

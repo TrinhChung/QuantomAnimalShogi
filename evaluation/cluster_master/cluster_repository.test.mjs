@@ -7,6 +7,7 @@ import {
   validateWorkerHeartbeat,
 } from "./cluster_contract.mjs";
 import { clusterTokenFromEnvironment } from "./cluster_routes.mjs";
+import { ClusterRepository } from "./cluster_repository.mjs";
 import { databaseConfigFromEnvironment } from "./database.mjs";
 
 const commit = "5e096227947cf53c760a027318e26183863483f3";
@@ -161,6 +162,11 @@ test("coordinator restores durable queued jobs into Redis", async () => {
 test("an empty Redis sorted set returns no job", async () => {
   const queue = new RedisClusterQueue({ zPopMin: async () => null });
   assert.equal(await queue.pop(), null);
+});
+
+test("repository state accepts a bounded result limit", async () => {
+  const repository = new ClusterRepository({ query: async () => [[]] });
+  assert.deepEqual(await repository.state(100), { workers: [], jobs: [] });
 });
 
 test("an incompatible head job does not block eligible work behind it", async () => {

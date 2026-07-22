@@ -80,7 +80,7 @@ const boundedString = (value, fieldName, maximumLength, pattern = null) => {
   return result;
 };
 
-const boundedInteger = (value, fieldName, minimum, maximum) => {
+export const boundedInteger = (value, fieldName, minimum, maximum) => {
   const result = Number(value);
   if (!Number.isInteger(result) || result < minimum || result > maximum) {
     throw new Error(`${fieldName} is invalid`);
