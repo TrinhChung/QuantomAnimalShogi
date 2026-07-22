@@ -48,9 +48,32 @@ git fetch --prune origin "${commit}"
 git checkout --detach "${commit}"
 '@
 
-$bootstrap | & ssh -o BatchMode=yes $SshHost bash -s -- $RemoteRepository $Commit $GitUrl
-if ($LASTEXITCODE -ne 0) {
-    throw "Deployment failed on $SshHost"
+$temporaryScript = Join-Path ([System.IO.Path]::GetTempPath()) ("qas-deploy-{0}.sh" -f [guid]::NewGuid())
+$temporaryOutput = "$temporaryScript.out"
+$temporaryError = "$temporaryScript.err"
+try {
+    [System.IO.File]::WriteAllText(
+        $temporaryScript,
+        ($bootstrap -replace "`r", ''),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $checkoutProcess = Start-Process `
+        -FilePath (Get-Command ssh -ErrorAction Stop).Source `
+        -ArgumentList @('-o', 'BatchMode=yes', $SshHost, 'bash', '-s', '--', $RemoteRepository, $Commit, $GitUrl) `
+        -RedirectStandardInput $temporaryScript `
+        -RedirectStandardOutput $temporaryOutput `
+        -RedirectStandardError $temporaryError `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    Get-Content -LiteralPath $temporaryOutput -ErrorAction SilentlyContinue
+    if ($checkoutProcess.ExitCode -ne 0) {
+        $checkoutError = Get-Content -LiteralPath $temporaryError -Raw -ErrorAction SilentlyContinue
+        throw "Deployment checkout failed on $SshHost. $checkoutError"
+    }
+}
+finally {
+    Remove-Item -LiteralPath $temporaryScript, $temporaryOutput, $temporaryError -Force -ErrorAction SilentlyContinue
 }
 & ssh -o BatchMode=yes $SshHost bash "$RemoteRepository/evaluation/deploy/bootstrap_master.sh"
 if ($LASTEXITCODE -ne 0) {
