@@ -1,0 +1,80 @@
+services:
+  qas-master:
+    build:
+      context: ../..
+      dockerfile: evaluation/deploy/Dockerfile.master
+    container_name: qas-master
+    env_file:
+      - /etc/qas/cluster.env
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 0.75
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+
+  qas-worker-phuong:
+    build:
+      context: ../..
+      dockerfile: evaluation/deploy/Dockerfile.worker
+    container_name: qas-worker-phuong
+    depends_on:
+      - qas-master
+    env_file:
+      - /etc/qas/worker.env
+    environment:
+      QAS_CLUSTER_URL: http://127.0.0.1:8766
+      QAS_KOKORO_CONTAINER: kokoro-fastapi-cpu-kokoro-tts-1
+      QAS_KOKORO_CPU_THRESHOLD: "5"
+      QAS_WORKER_CAPABILITIES: git_update,benchmark,tournament
+      QAS_WORKER_ID: phuong-master-spare
+      QAS_WORKER_LABELS: shared_with_kokoro=true,os=linux,role=master-spare
+      QAS_WORKER_MAX_CORES: "1"
+      QAS_WORKER_NAME: Phuong spare worker
+      QAS_WORKER_WORKSPACE: /var/lib/qas-worker/workspace
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 2304m
+    cpus: 1.0
+    volumes:
+      - qas_worker_data:/var/lib/qas-worker
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: qas-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.listen-address=127.0.0.1:9090
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 512m
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    container_name: qas-grafana
+    env_file:
+      - /etc/qas/grafana.env
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "3200"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:8331/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 512m
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  qas_worker_data:

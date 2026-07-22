@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: qas-cluster
+    static_configs:
+      - targets: ["127.0.0.1:8766"]
+    metrics_path: /api/cluster/metrics
+
+  - job_name: phuong-node
+    static_configs:
+      - targets: ["127.0.0.1:9100"]

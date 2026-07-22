@@ -1,0 +1,9 @@
+.git
+.cache
+build
+local_reports
+output
+quantum-animal-shogi
+evaluation/cluster_master/node_modules
+**/__pycache__
+**/*.pyc

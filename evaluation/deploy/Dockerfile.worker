@@ -1,0 +1,11 @@
+FROM python:3.12-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake docker.io g++ git make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /bootstrap
+COPY evaluation/ ./evaluation/
+
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-m", "evaluation.cluster_worker"]

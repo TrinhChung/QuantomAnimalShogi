@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QAS Cluster</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, system-ui, sans-serif;
+        color: #26312d;
+        background: #eef2ef;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        display: grid;
+        gap: 18px;
+        margin: auto;
+        max-width: 1280px;
+        padding: 24px;
+      }
+      header {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+      }
+      header p {
+        color: #ad752d;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        margin: 0;
+        text-transform: uppercase;
+      }
+      h1,
+      h2 {
+        font-family: Georgia, serif;
+      }
+      h1 {
+        font-size: 31px;
+        margin: 5px 0;
+      }
+      h2 {
+        margin: 0 0 14px;
+      }
+      header span,
+      small {
+        color: #6b7772;
+      }
+      .surface {
+        background: #fff;
+        border: 1px solid #dbe2dd;
+        border-radius: 14px;
+        padding: 18px;
+      }
+      .access {
+        align-items: end;
+        display: flex;
+        gap: 12px;
+      }
+      .access label {
+        flex: 1;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+      }
+      label span {
+        color: #66736d;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      input,
+      select {
+        background: #f7f9f7;
+        border: 1px solid #d1dad4;
+        border-radius: 8px;
+        min-height: 38px;
+        padding: 8px 10px;
+      }
+      button {
+        background: #192824;
+        border: 0;
+        border-radius: 8px;
+        color: #fff;
+        cursor: pointer;
+        min-height: 38px;
+        padding: 8px 14px;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+      #error {
+        color: #a23f34;
+        font-size: 12px;
+      }
+      .summary {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .summary article {
+        background: #15231f;
+        border-radius: 14px;
+        color: #fff;
+        display: grid;
+        padding: 18px;
+      }
+      .summary span,
+      .summary small {
+        color: #8da099;
+      }
+      .summary strong {
+        font-size: 26px;
+        margin: 7px 0 2px;
+      }
+      .form-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-bottom: 14px;
+      }
+      .wide {
+        grid-column: 1 / -1;
+      }
+      .workers {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      }
+      .workers article {
+        background: #f4f7f5;
+        border-radius: 10px;
+        padding: 13px;
+      }
+      .workers div {
+        display: flex;
+        justify-content: space-between;
+      }
+      .workers p {
+        color: #59665f;
+        font-size: 12px;
+      }
+      .online {
+        color: #28714f;
+      }
+      .offline,
+      .failed {
+        color: #a24337;
+      }
+      .table {
+        overflow-x: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #e3e9e5;
+        font-size: 12px;
+        padding: 11px 8px;
+        text-align: left;
+      }
+      th {
+        color: #74817b;
+        font-size: 10px;
+        text-transform: uppercase;
+      }
+      code {
+        color: #744f22;
+      }
+      td button {
+        background: #8d4036;
+        min-height: 30px;
+        padding: 5px 9px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 720px) {
+        main {
+          padding: 14px;
+        }
+        .summary,
+        .form-grid {
+          grid-template-columns: 1fr;
+        }
+        .wide {
+          grid-column: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p>Distributed evaluation</p>
+          <h1>Cụm benchmark & thi đấu</h1>
+          <span>MySQL audit · Redis queue · immutable Git commit</span>
+        </div>
+        <button id="refresh">Làm mới</button>
+      </header>
+      <section class="surface access">
+        <label
+          ><span>Cluster token</span
+          ><input
+            id="token"
+            type="password"
+            autocomplete="current-password" /></label
+        ><button id="connect">Kết nối</button><strong id="error"></strong>
+      </section>
+      <section id="content" hidden>
+        <div class="summary">
+          <article>
+            <span>Redis queue</span><strong id="queue-depth">0</strong
+            ><small>job đang chờ</small>
+          </article>
+          <article>
+            <span>Kokoro</span><strong id="kokoro">Rảnh</strong
+            ><small>resource gate master</small>
+          </article>
+          <article>
+            <span>Worker online</span><strong id="online">0</strong
+            ><small id="registered">0 đã đăng ký</small>
+          </article>
+        </div>
+      </section>
+      <section id="enqueue" class="surface" hidden>
+        <h2>Tạo job</h2>
+        <div class="form-grid">
+          <label
+            ><span>Loại</span
+            ><select id="kind">
+              <option value="benchmark">Benchmark</option>
+              <option value="tournament">Thi đấu A/B</option>
+            </select></label
+          ><label
+            ><span>Profile</span
+            ><select id="profile"></select></label
+          ><label class="wide"
+            ><span>Git commit candidate (40 ký tự)</span
+            ><input id="commit" maxlength="40" /></label
+          ><label
+            ><span>Tên candidate</span
+            ><input id="candidate" value="Current candidate" /></label
+          ><label id="opponent-field" hidden
+            ><span>Git commit đối thủ</span
+            ><input
+              id="opponent"
+              maxlength="40"
+              value="5e096227947cf53c760a027318e26183863483f3"
+          /></label>
+        </div>
+        <button id="submit">Đưa vào hàng đợi</button>
+      </section>
+      <section id="workers-section" class="surface" hidden>
+        <h2>Worker</h2>
+        <div id="workers" class="workers"></div>
+      </section>
+      <section id="jobs-section" class="surface" hidden>
+        <h2>Job gần đây</h2>
+        <div class="table">
+          <table>
+            <thead>
+              <tr>
+                <th>Loại</th>
+                <th>Trạng thái</th>
+                <th>Commit</th>
+                <th>Worker</th>
+                <th>Tạo lúc</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="jobs"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script>
+      const profiles = {
+        benchmark: [
+          "infrastructure_smoke",
+          "correctness_regression",
+          "fixed_depth_quick",
+          "fixed_depth_deep",
+          "fixed_time_quick",
+          "fixed_time_contest",
+          "diagnostic_telemetry",
+        ],
+        tournament: [
+          "strength_quick",
+          "strength_candidate",
+          "promotion_test",
+          "reliability_soak",
+        ],
+      };
+      const byId = (id) => document.getElementById(id);
+      const tokenInput = byId("token");
+      tokenInput.value = sessionStorage.getItem("qasClusterToken") || "";
+      const headers = () => ({ authorization: `Bearer ${tokenInput.value}` });
+      const escapeHtml = (value) =>
+        String(value ?? "").replace(
+          /[&<>"']/g,
+          (character) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#039;",
+            })[character],
+        );
+      const showError = (error) => {
+        byId("error").textContent =
+          error instanceof Error ? error.message : String(error);
+      };
+      const updateProfiles = () => {
+        const kind = byId("kind").value;
+        byId("profile").innerHTML = profiles[kind]
+          .map((item) => `<option>${item}</option>`)
+          .join("");
+        byId("opponent-field").hidden = kind !== "tournament";
+      };
+      const render = (state) => {
+        byId("content").hidden =
+          byId("enqueue").hidden =
+          byId("workers-section").hidden =
+          byId("jobs-section").hidden =
+            false;
+        byId("queue-depth").textContent = state.queue.depth;
+        byId("kokoro").textContent = state.queue.kokoroBusy
+          ? "Ưu tiên"
+          : "Rảnh";
+        byId("online").textContent = state.workers.filter(
+          (worker) => worker.status === "online",
+        ).length;
+        byId("registered").textContent = `${state.workers.length} đã đăng ký`;
+        byId("workers").innerHTML = state.workers
+          .map(
+            (worker) =>
+              `<article><div><strong>${escapeHtml(worker.displayName)}</strong><span class="${escapeHtml(worker.status)}">${escapeHtml(worker.status)}</span></div><p>${escapeHtml(worker.hostname)} · ${escapeHtml(worker.platform)} · ${worker.cpuThreads} CPU · ${Math.round(worker.memoryMb / 1024)} GB</p><small>${worker.resourceBusy ? "Đang nhường tài nguyên cho Kokoro" : `Commit ${escapeHtml(worker.currentGitCommit?.slice(0, 12) || "—")}`}</small></article>`,
+          )
+          .join("");
+        byId("jobs").innerHTML = state.jobs
+          .map(
+            (job) =>
+              `<tr><td><strong>${escapeHtml(job.kind)}</strong><br><small>${job.id.slice(0, 8)}</small></td><td class="${escapeHtml(job.status)}">${escapeHtml(job.status)}</td><td><code>${job.gitCommit.slice(0, 12)}</code></td><td>${escapeHtml(job.workerId || "—")}</td><td>${new Date(job.createdAt).toLocaleString("vi-VN")}</td><td>${["queued", "claimed", "running"].includes(job.status) ? `<button data-cancel="${job.id}">Hủy</button>` : ""}</td></tr>`,
+          )
+          .join("");
+      };
+      const loadState = async () => {
+        try {
+          const response = await fetch("/api/cluster/state?limit=100", {
+            headers: headers(),
+          });
+          const body = await response.json();
+          if (!response.ok)
+            throw new Error(body.error || "Không tải được cluster");
+          sessionStorage.setItem("qasClusterToken", tokenInput.value);
+          byId("error").textContent = "";
+          render(body);
+        } catch (error) {
+          showError(error);
+        }
+      };
+      const submit = async () => {
+        try {
+          const kind = byId("kind").value;
+          const payload = {
+            profile: byId("profile").value,
+            candidateName: byId("candidate").value,
+            changeCategory: "performance_only",
+            opponents: [],
+            seed: 1363239733,
+          };
+          if (kind === "tournament") {
+            payload.opponentGitCommit = byId("opponent").value;
+            payload.opponentName = "stage5-clean";
+          }
+          const response = await fetch("/api/cluster/jobs", {
+            method: "POST",
+            headers: { ...headers(), "content-type": "application/json" },
+            body: JSON.stringify({
+              kind,
+              gitCommit: byId("commit").value,
+              payload,
+              requestedBy: "web",
+            }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || "Không tạo được job");
+          await loadState();
+        } catch (error) {
+          showError(error);
+        }
+      };
+      byId("kind").addEventListener("change", updateProfiles);
+      byId("connect").addEventListener("click", loadState);
+      byId("refresh").addEventListener("click", loadState);
+      byId("submit").addEventListener("click", submit);
+      byId("jobs").addEventListener("click", async (event) => {
+        const jobId = event.target.dataset.cancel;
+        if (!jobId) return;
+        await fetch(`/api/cluster/jobs/${jobId}/cancel`, {
+          method: "POST",
+          headers: { ...headers(), "content-type": "application/json" },
+          body: "{}",
+        });
+        await loadState();
+      });
+      updateProfiles();
+      if (tokenInput.value) loadState();
+      setInterval(() => {
+        if (tokenInput.value) loadState();
+      }, 10000);
+    </script>
+  </body>
+</html>

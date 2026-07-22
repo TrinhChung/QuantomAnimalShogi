@@ -1,5 +1,10 @@
 # Permanent Engine Evaluation System
 
+Distributed execution is an application-boundary extension of this system. MySQL remains the
+durable audit source, Redis provides the recoverable priority queue, and workers execute only
+typed jobs at an immutable Git commit. Deployment and operating instructions are in
+[Distributed Evaluation Cluster](../docs/distributed_evaluation.md).
+
 This directory owns the only standard acceptance workflow for future Quantum Animal Shogi
 engine versions. It evaluates an already-built executable; it never silently rebuilds the
 candidate and never promotes it automatically.

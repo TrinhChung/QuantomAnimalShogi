@@ -1,0 +1,61 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "qas_cluster_queue_depth", "refId": "A" }],
+      "title": "Shogi queue depth",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "mappings": [{ "options": { "0": { "text": "Idle" }, "1": { "text": "Kokoro priority" } }, "type": "value" }] }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "qas_cluster_kokoro_busy", "refId": "A" }],
+      "title": "Shared master resource gate",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "qas_cluster_workers{status=\"online\"}", "refId": "A" }],
+      "title": "Workers online",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 7 },
+      "id": 4,
+      "targets": [{ "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))", "refId": "A" }],
+      "title": "Phuong CPU utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 7 },
+      "id": 5,
+      "targets": [{ "expr": "node_memory_MemAvailable_bytes", "refId": "A" }],
+      "title": "Phuong available memory",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 41,
+  "tags": ["qas", "cluster"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Quantum Animal Shogi Cluster",
+  "uid": "qas-cluster-overview",
+  "version": 1
+}
