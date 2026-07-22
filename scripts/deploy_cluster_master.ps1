@@ -46,11 +46,14 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 git fetch --prune origin "${commit}"
 git checkout --detach "${commit}"
-bash evaluation/deploy/bootstrap_master.sh
 '@
 
 $bootstrap | & ssh -o BatchMode=yes $SshHost bash -s -- $RemoteRepository $Commit $GitUrl
 if ($LASTEXITCODE -ne 0) {
     throw "Deployment failed on $SshHost"
+}
+& ssh -o BatchMode=yes $SshHost bash "$RemoteRepository/evaluation/deploy/bootstrap_master.sh"
+if ($LASTEXITCODE -ne 0) {
+    throw "Master bootstrap failed on $SshHost"
 }
 Write-Host "Deployed commit $Commit to $SshHost"
