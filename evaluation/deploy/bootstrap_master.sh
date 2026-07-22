@@ -51,7 +51,7 @@ if [[ -z "${database_password}" ]]; then
   echo "QAS_DB_PASSWORD is missing from ${cluster_environment}" >&2
   exit 2
 fi
-docker exec -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
+docker exec -i -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
   mysql -uroot --protocol=socket <<SQL
 CREATE DATABASE IF NOT EXISTS quantum_animal_shogi
   CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
@@ -77,7 +77,7 @@ if [[ -z "${backup_password}" ]]; then
   echo "QAS_BACKUP_PASSWORD is missing from ${backup_environment}" >&2
   exit 2
 fi
-docker exec -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
+docker exec -i -e MYSQL_PWD="${mysql_root_password}" "${mysql_container}" \
   mysql -uroot --protocol=socket <<SQL
 CREATE USER IF NOT EXISTS 'qas_backup'@'%' IDENTIFIED BY '${backup_password}';
 ALTER USER 'qas_backup'@'%' IDENTIFIED BY '${backup_password}';
