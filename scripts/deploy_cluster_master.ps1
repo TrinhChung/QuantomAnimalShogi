@@ -37,7 +37,7 @@ target="$1"
 commit="$2"
 url="$3"
 if [[ ! -d "${target}/.git" ]]; then
-  git clone --no-checkout "${url}" "${target}"
+  git clone "${url}" "${target}"
 fi
 cd "${target}"
 if [[ -n "$(git status --porcelain)" ]]; then
