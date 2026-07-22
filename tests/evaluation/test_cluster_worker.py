@@ -46,6 +46,7 @@ class ClusterWorkerTests(unittest.TestCase):
             run_checked.side_effect = run
             GitWorkspace(path, "git@example.invalid:repo.git").prepare(commit)
             self.assertEqual(run_checked.call_args_list[0].args[0][:2], ["git", "clone"])
+            self.assertNotIn("--no-checkout", run_checked.call_args_list[0].args[0])
 
 
 if __name__ == "__main__":

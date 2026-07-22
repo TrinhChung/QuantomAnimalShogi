@@ -181,7 +181,7 @@ class GitWorkspace:
         if not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
             _run_checked(
-                ["git", "clone", "--no-checkout", self.remote_url, str(self.path)],
+                ["git", "clone", self.remote_url, str(self.path)],
                 self.path.parent,
             )
         if not (self.path / ".git").exists():
