@@ -31,6 +31,22 @@ class ClusterWorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkerError, "git commit is invalid"):
                 workspace.prepare("main")
 
+    @mock.patch("evaluation.cluster_worker_support._run_checked")
+    def test_workspace_retries_an_empty_failed_clone(self, run_checked: mock.Mock) -> None:
+        commit = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "worker"
+            path.mkdir()
+
+            def run(command: list[str], _: Path) -> str:
+                if command[:2] == ["git", "clone"]:
+                    (path / ".git").mkdir(parents=True)
+                return ""
+
+            run_checked.side_effect = run
+            GitWorkspace(path, "git@example.invalid:repo.git").prepare(commit)
+            self.assertEqual(run_checked.call_args_list[0].args[0][:2], ["git", "clone"])
+
 
 if __name__ == "__main__":
     unittest.main()

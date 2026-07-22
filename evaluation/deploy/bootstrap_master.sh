@@ -97,7 +97,7 @@ if [[ -z "${cluster_token}" ]]; then
 fi
 cat >"${worker_environment}" <<EOF
 QAS_CLUSTER_TOKEN=${cluster_token}
-QAS_GIT_REMOTE_URL=https://github.com/TrinhChung/QuantomAnimalShogi.git
+QAS_GIT_REMOTE_URL=git@github.com:TrinhChung/QuantomAnimalShogi.git
 EOF
 chmod 600 "${worker_environment}"
 

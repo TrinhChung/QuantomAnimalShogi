@@ -173,6 +173,11 @@ class GitWorkspace:
     def prepare(self, commit: str, remote: str = "origin") -> None:
         if not GIT_COMMIT.fullmatch(commit):
             raise WorkerError("job git commit is invalid")
+        if self.path.exists() and not (self.path / ".git").exists():
+            if self.path.is_dir() and not any(self.path.iterdir()):
+                self.path.rmdir()
+            else:
+                raise WorkerError(f"worker workspace is not a Git clone: {self.path}")
         if not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
             _run_checked(
@@ -180,7 +185,7 @@ class GitWorkspace:
                 self.path.parent,
             )
         if not (self.path / ".git").exists():
-            raise WorkerError(f"worker workspace is not a Git clone: {self.path}")
+            raise WorkerError(f"worker workspace clone failed: {self.path}")
         status = _run_checked(["git", "status", "--porcelain"], self.path)
         if status:
             raise WorkerError("worker workspace has uncommitted changes")
