@@ -8,6 +8,8 @@ param(
     [ValidateRange(1, 65535)]
     [int]$BridgePort = 8766,
 
+    [switch]$BridgeOnly,
+
     [switch]$InstallOnly
 )
 
@@ -22,6 +24,14 @@ $bridgeScript = Join-Path $webDirectory 'server\native_bot_bridge.mjs'
 $logDirectory = Join-Path $repositoryRoot '.cache\web-solo'
 $bridgeStandardOutput = Join-Path $logDirectory 'native-bot-bridge.out.log'
 $bridgeStandardError = Join-Path $logDirectory 'native-bot-bridge.err.log'
+$databaseVariableNames = @(
+    'QAS_DB_HOST',
+    'QAS_DB_PORT',
+    'QAS_DB_USER',
+    'QAS_DB_PASSWORD',
+    'QAS_DB_NAME',
+    'QAS_DB_REQUIRED'
+)
 
 if (-not (Test-Path -LiteralPath $packageFile -PathType Leaf)) {
     throw "Web package was not found at $packageFile"
@@ -32,6 +42,15 @@ if (-not (Test-Path -LiteralPath $bridgeScript -PathType Leaf)) {
 
 Push-Location -LiteralPath $webDirectory
 try {
+    foreach ($databaseVariableName in $databaseVariableNames) {
+        if (-not [Environment]::GetEnvironmentVariable($databaseVariableName, 'Process')) {
+            $userValue = [Environment]::GetEnvironmentVariable($databaseVariableName, 'User')
+            if ($null -ne $userValue) {
+                [Environment]::SetEnvironmentVariable($databaseVariableName, $userValue, 'Process')
+            }
+        }
+    }
+
     if (-not (Test-Path -LiteralPath $viteCommand -PathType Leaf)) {
         Write-Host 'Installing web dependencies...'
         & npm install
@@ -77,6 +96,11 @@ try {
     }
 
     Write-Host "Native C++ bots: connected on port $BridgePort"
+    if ($BridgeOnly) {
+        Write-Host 'Bridge-only mode is running. Press Ctrl+C to stop.'
+        Wait-Process -Id $bridgeProcess.Id
+        return
+    }
     Write-Host "Web: http://${ListenAddress}:$Port/"
     $previousBridgePort = $env:QAS_BOT_BRIDGE_PORT
     $env:QAS_BOT_BRIDGE_PORT = $BridgePort

@@ -3,7 +3,8 @@
 CPU-only C++17 engine implementing the official rules and 240-action JSON-line
 protocol in [RULE_GAME.md](docs/RULE_GAME.md).
 
-Search is delivered in two verified stages:
+The verified classical search evolved through these layers; the accepted version and exact runtime
+status are tracked in [Current Stage Algorithm Status](docs/current_stage_algorithms.md):
 
 1. Negamax Alpha-Beta with iterative deepening, handcrafted evaluation, move
    ordering, killer/history heuristics and a fixed-size transposition table.
@@ -11,21 +12,42 @@ Search is delivered in two verified stages:
    baseline tests pass.
 3. Resource-aware AB+TT+PVS with aspiration windows, strong ordering and runtime
    profiles.
+4. Allocation-conscious evaluation with exact Catch/Try candidate filtering.
+5. Lookup-table lineage propagation cross-checked against the permutation reference.
 
 No ML, GPU, network, paid dependency or background worker is used.
 
 ## Web solo
 
 The companion app in [`quantum-animal-shogi/`](quantum-animal-shogi/README.md) supports exactly
-two local modes: human versus engine and engine versus engine. Lightweight packaged bots run in
+two local modes: human versus engine and an automated seeded bot championship. Lightweight packaged bots run in
 Rust/WASM or JavaScript. A local Node bridge exposes allowlisted historical C++ Stage binaries to
-the same bot selector. No Python runtime, database, or tournament service is required.
+the same catalog. Bot championships snapshot the persistent Elo table into four seed groups, pair
+the highest remaining seed with the lowest, grant the highest seed a bye when needed, and swap the
+first seat between games. Elo is never reset between tournaments. MySQL 8 persists the rating
+ledger, tournament bracket, bot versions, series, matches, and individual moves. No Python runtime
+is required.
 
 From the repository root, install missing dependencies and start the development server with:
 
 ```powershell
 scripts\run_web.ps1
 ```
+
+The bridge reads `QAS_DB_HOST`, `QAS_DB_PORT`, `QAS_DB_USER`, `QAS_DB_PASSWORD`, and
+`QAS_DB_NAME` from the process/user environment (or `quantum-animal-shogi/web/.env`). With
+`QAS_DB_REQUIRED=true`, startup fails instead of silently running without persistence. Migrations
+under `web/server/migrations/` are applied automatically.
+
+The web **Benchmark** page stores algorithm profiles, suites, runs, raw per-position cases and
+reviewed findings per immutable bot version in MySQL. It keeps Elo separate from speed, memory and
+search-quality measurements, then derives evidence-backed bottleneck signals to guide the next A/B
+optimization. See the web README for the validated benchmark import contract.
+
+Web trajectories use a versioned, replay-validated training-data contract. Legacy rows are
+quarantined; Elo and reports include only validated games; versioned labels and dataset manifests
+are stored in MySQL; export replays every match and splits at the series boundary. See
+[Training Data Contract](docs/training_data_contract.md).
 
 ## Build
 
@@ -165,6 +187,9 @@ required runtime layout.
 
 ## Evidence
 
+- [Current Stage Algorithm Status](docs/current_stage_algorithms.md)
+- [Bot Algorithm Guide](docs/bot_algorithms.md)
+- [Training Data Contract](docs/training_data_contract.md)
 - [Architecture note](docs/architecture.md)
 - [Stage 1 benchmark](reports/stage1-benchmark.md)
 - [Stage 2 benchmark](reports/stage2-benchmark.md)
@@ -172,7 +197,7 @@ required runtime layout.
 - [Stage 3.5 benchmark and tuning report](reports/stage35-benchmark.md)
 - [Stage 4 evaluation optimization report](reports/stage4/summary.md)
 - [RAM/TT benchmark](reports/ram-benchmark.md)
-- [Stage 3 recommendation](docs/stage3-recommendation.md)
+- [Historical Stage 3 recommendation](docs/stage3-recommendation.md)
 
 ## Permanent version evaluation
 

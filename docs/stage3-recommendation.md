@@ -1,5 +1,8 @@
 # Stage 3 recommendation
 
+> Historical tuning note. Trạng thái accepted hiện tại và các thuật toán đang bật được theo dõi tại
+> [Current Stage Algorithm Status](current_stage_algorithms.md).
+
 - Default profile: `contest_safe`.
 - Practical TT target: 256 MiB requested (192 MiB allocated after power-of-two
   rounding with the current 24-byte entry). Larger tables showed no depth-4 gain.
