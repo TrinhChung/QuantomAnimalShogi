@@ -1,0 +1,1 @@
+profile=contest_safe tt_mb=192 tt_entries=8388608

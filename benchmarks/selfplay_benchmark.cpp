@@ -1,10 +1,10 @@
-#include "search/alpha_beta.hpp"
-
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <random>
 #include <string>
+
+#include "search/alpha_beta.hpp"
 
 int main(int argc, char** argv) {
     const int games = argc >= 2 ? std::max(2, std::atoi(argv[1])) : 20;
@@ -22,8 +22,10 @@ int main(int argc, char** argv) {
         while (state.terminal == qas::Terminal::None) {
             const auto legal = qas::generate_legal_moves(state);
             if (legal.empty()) {
-                if (state.side_to_move == engine_side) ++losses;
-                else ++wins;
+                if (state.side_to_move == engine_side)
+                    ++losses;
+                else
+                    ++wins;
                 break;
             }
             qas::Move selected;
@@ -43,19 +45,23 @@ int main(int argc, char** argv) {
             qas::Undo undo;
             if (!qas::apply_move(state, selected, undo)) {
                 ++illegal;
-                if (state.side_to_move == engine_side) ++losses;
-                else ++wins;
+                if (state.side_to_move == engine_side)
+                    ++losses;
+                else
+                    ++wins;
                 break;
             }
             if (state.terminal != qas::Terminal::None) {
-                if (state.terminal == qas::Terminal::Draw) ++draws;
-                else if (state.winner == qas::side_index(engine_side)) ++wins;
-                else ++losses;
+                if (state.terminal == qas::Terminal::Draw)
+                    ++draws;
+                else if (state.winner == qas::side_index(engine_side))
+                    ++wins;
+                else
+                    ++losses;
             }
         }
     }
-    std::cout << "games=" << games << " depth=" << depth << " wins=" << wins
-              << " losses=" << losses << " draws=" << draws << " illegal=" << illegal
-              << '\n';
+    std::cout << "games=" << games << " depth=" << depth << " wins=" << wins << " losses=" << losses
+              << " draws=" << draws << " illegal=" << illegal << '\n';
     return illegal == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

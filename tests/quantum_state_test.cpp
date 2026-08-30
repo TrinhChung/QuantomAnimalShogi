@@ -30,8 +30,7 @@ void test_initial_state() {
     check(state.assignments().size() == 24, "initial state has 4! assignments");
     for (qas::Animal animal : qas::all_animals) {
         const auto probability = state.probability(0, animal);
-        check(probability.matching == 6 && probability.total == 24,
-              "initial probability is 6/24");
+        check(probability.matching == 6 && probability.total == 24, "initial probability is 6/24");
     }
 }
 
@@ -43,8 +42,7 @@ void test_move_filtering() {
     check(state.assignments().size() == 12, "horizontal move leaves 12 assignments");
 
     state.observe_move(0, 1, 1, qas::Side::South);
-    check(state.possible(0) == qas::bit(qas::Animal::Lion),
-          "diagonal after horizontal fixes lion");
+    check(state.possible(0) == qas::bit(qas::Animal::Lion), "diagonal after horizontal fixes lion");
     check(state.assignments().size() == 6, "fixed piece leaves 3! assignments");
 }
 

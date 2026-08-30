@@ -1,11 +1,11 @@
-#include "core/config.hpp"
-#include "search/alpha_beta.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+
+#include "core/config.hpp"
+#include "search/alpha_beta.hpp"
 
 int main(int argc, char** argv) {
     const int depth = argc >= 2 ? std::max(1, std::atoi(argv[1])) : 4;

@@ -1,6 +1,3 @@
-#include "search/alpha_beta.hpp"
-#include "exact/equivalence.hpp"
-
 #include <algorithm>
 #include <cstdlib>
 #include <iomanip>
@@ -8,11 +5,15 @@
 #include <string>
 #include <vector>
 
+#include "exact/equivalence.hpp"
+#include "search/alpha_beta.hpp"
+
 namespace {
 
 bool has_immediate_win(const qas::State& state) {
     for (const qas::Move& move : qas::generate_legal_moves(state)) {
-        if (qas::is_immediate_winning_move(state, move)) return true;
+        if (qas::is_immediate_winning_move(state, move))
+            return true;
     }
     return false;
 }
@@ -22,8 +23,7 @@ qas::State safe_position(int plies, int salt) {
     for (int ply = 0; ply < plies; ++ply) {
         auto moves = qas::generate_legal_moves(state);
         std::sort(moves.begin(), moves.end(), [](const qas::Move& left, const qas::Move& right) {
-            return left.from * qas::board_size + left.to <
-                   right.from * qas::board_size + right.to;
+            return left.from * qas::board_size + left.to < right.from * qas::board_size + right.to;
         });
         bool selected = false;
         for (std::size_t offset = 0; offset < moves.size(); ++offset) {
@@ -38,7 +38,8 @@ qas::State safe_position(int plies, int salt) {
                 break;
             }
         }
-        if (!selected) break;
+        if (!selected)
+            break;
     }
     return state;
 }
@@ -91,7 +92,8 @@ int main(int argc, char** argv) {
                  "cutoffs,first_cutoff_rate,avg_cutoff_rank,tt_probes,tt_hits,tt_hit_rate,"
                  "tt_size_mb,l_eq_calls,l_eq_dup_ratio,l_eq_ms,legal\n";
     for (const Mode& mode : modes) {
-        if (!mode_filter.empty() && mode_filter != mode.name) continue;
+        if (!mode_filter.empty() && mode_filter != mode.name)
+            continue;
         for (const auto& item : positions) {
             qas::AlphaBetaEngine engine(1U << 18U);
             qas::SearchOptions options;
@@ -105,21 +107,27 @@ int main(int argc, char** argv) {
             options.strong_ordering_enabled = mode.strong_ordering;
             options.killer_enabled = mode.strong_ordering;
             options.history_enabled = mode.strong_ordering;
-            if (mode.leq) qas::enable_successor_equivalence(options, 12);
+            if (mode.leq)
+                qas::enable_successor_equivalence(options, 12);
             const auto result = engine.find_best_move(item.second, options);
             const auto& stats = result.stats;
-            const double nps = stats.elapsed_ms > 0 ? stats.searched_nodes * 1000.0 / stats.elapsed_ms : 0;
-            const double first_rate = stats.cutoffs > 0 ? static_cast<double>(stats.first_move_cutoffs) / stats.cutoffs : 0;
-            const double hit_rate = stats.tt_probes > 0 ? static_cast<double>(stats.tt_hits) / stats.tt_probes : 0;
-            std::cout << "local_benchmark," << mode.name << ',' << item.first << ',' << depth
-                      << ',' << std::fixed << std::setprecision(3) << stats.elapsed_ms << ','
-                      << stats.searched_nodes << ',' << nps << ',' << qas::move_string(result.best_move)
-                      << ',' << result.score << ',' << stats.average_legal_moves() << ','
-                      << stats.cutoffs << ',' << first_rate << ',' << stats.average_cutoff_rank()
-                      << ',' << stats.tt_probes << ',' << stats.tt_hits << ',' << hit_rate
-                      << ',' << (engine.tt_bytes() >> 20U) << ',' << stats.leq_grouped_nodes
-                      << ',' << stats.duplicate_ratio() << ',' << stats.leq_grouping_ms << ','
-                      << (legal_result(item.second, result) ? 1 : 0) << '\n';
+            const double nps =
+                stats.elapsed_ms > 0 ? stats.searched_nodes * 1000.0 / stats.elapsed_ms : 0;
+            const double first_rate =
+                stats.cutoffs > 0 ? static_cast<double>(stats.first_move_cutoffs) / stats.cutoffs
+                                  : 0;
+            const double hit_rate =
+                stats.tt_probes > 0 ? static_cast<double>(stats.tt_hits) / stats.tt_probes : 0;
+            std::cout << "local_benchmark," << mode.name << ',' << item.first << ',' << depth << ','
+                      << std::fixed << std::setprecision(3) << stats.elapsed_ms << ','
+                      << stats.searched_nodes << ',' << nps << ','
+                      << qas::move_string(result.best_move) << ',' << result.score << ','
+                      << stats.average_legal_moves() << ',' << stats.cutoffs << ',' << first_rate
+                      << ',' << stats.average_cutoff_rank() << ',' << stats.tt_probes << ','
+                      << stats.tt_hits << ',' << hit_rate << ',' << (engine.tt_bytes() >> 20U)
+                      << ',' << stats.leq_grouped_nodes << ',' << stats.duplicate_ratio() << ','
+                      << stats.leq_grouping_ms << ',' << (legal_result(item.second, result) ? 1 : 0)
+                      << '\n';
         }
     }
     return 0;
