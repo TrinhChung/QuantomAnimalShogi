@@ -184,6 +184,50 @@ void test_turn_changes_search_key() {
     check(result.score == 0, "all ordinary turn-256 successors evaluate as draw");
 }
 
+void test_tactical_siege_evaluation() {
+    qas::AlphaBetaEngine engine(1U << 14U);
+    qas::State exposed_opp = qas::initial_state();
+    exposed_opp.mask[4] = qas::bit(qas::Animal::Lion);
+    exposed_opp.mask[5] = qas::bit(qas::Animal::Chick);
+    exposed_opp.mask[6] = qas::bit(qas::Animal::Giraffe);
+    exposed_opp.mask[7] = qas::bit(qas::Animal::Elephant);
+    qas::recompute_hash(exposed_opp);
+
+    const qas::State symmetric = qas::initial_state();
+    const int score_symmetric = engine.evaluate(symmetric);
+    const int score_exposed = engine.evaluate(exposed_opp);
+    check(score_exposed > score_symmetric,
+          "exposing opponent quantum identity while keeping ours hidden increases evaluation");
+
+    qas::State pending_try = exposed_opp;
+    pending_try.mask[0] = qas::bit(qas::Animal::Lion);
+    pending_try.mask[1] = qas::bit(qas::Animal::Chick);
+    pending_try.mask[2] = qas::bit(qas::Animal::Giraffe);
+    pending_try.mask[3] = qas::bit(qas::Animal::Elephant);
+    pending_try.board.fill(-1);
+    for (int piece = 0; piece < qas::physical_piece_count; ++piece) {
+        pending_try.pos[piece] = static_cast<std::uint8_t>(qas::first_hand_slot + piece);
+    }
+    place(pending_try, 0, 0);
+    place(pending_try, 2, 3);
+    place(pending_try, 3, 4);
+    place(pending_try, 4, 8);
+    pending_try.side_to_move = qas::Side::North;
+    qas::recompute_hash(pending_try);
+    const int try_score = -engine.evaluate(pending_try);
+    check(try_score > 10'000,
+          "uncontestable pending Try corridor receives decisive tactical bonus");
+}
+
+void test_lambda_lmr_depth_four_search() {
+    qas::AlphaBetaEngine engine(1U << 16U);
+    const qas::State state = qas::initial_state();
+    const auto result = engine.search_fixed_depth(state, 4, true);
+    check(result.has_move && is_legal(state, result.best_move),
+          "depth-4 search with lambda-LMR and countermoves returns a legal move");
+    check(result.stats.depth_reached == 4, "depth-4 search fully completes");
+}
+
 }  // namespace
 
 int main() {
@@ -195,6 +239,8 @@ int main() {
     test_injected_stop_keeps_completed_depth();
     test_benchmark_instrumentation_and_pv();
     test_turn_changes_search_key();
+    test_tactical_siege_evaluation();
+    test_lambda_lmr_depth_four_search();
     if (failures != 0) {
         std::cerr << failures << " search test(s) failed\n";
         return EXIT_FAILURE;

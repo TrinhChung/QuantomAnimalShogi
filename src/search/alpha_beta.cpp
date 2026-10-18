@@ -66,16 +66,6 @@ class ComponentTimer {
     std::chrono::steady_clock::time_point start_{};
 };
 
-/// @brief Counts set bits in an animal-form mask.
-/// @param mask Mask to inspect.
-/// @return Number of candidate forms.
-int popcount(Mask mask) {
-    int count = 0;
-    for (; mask != 0; mask = static_cast<Mask>(mask & (mask - 1)))
-        ++count;
-    return count;
-}
-
 /// @brief Counts set squares in a board bitmask.
 /// @param mask Board bitmask to inspect.
 /// @return Number of set board squares.
@@ -84,22 +74,6 @@ int popcount_board(std::uint16_t mask) {
     for (; mask != 0; mask = static_cast<std::uint16_t>(mask & (mask - 1)))
         ++count;
     return count;
-}
-
-/// @brief Computes mean material value across candidate forms.
-/// @param mask Candidate-form mask.
-/// @return Integer mean value, or zero for an empty mask.
-int expected_piece_value(Mask mask) {
-    constexpr std::array<int, 5> values{100, 320, 310, 1050, 420};
-    int total = 0;
-    int count = 0;
-    for (Animal form : all_forms) {
-        if (contains(mask, form)) {
-            total += values[static_cast<std::size_t>(form)];
-            ++count;
-        }
-    }
-    return count == 0 ? 0 : total / count;
 }
 
 /// @brief Counts bits during compile-time lookup-table construction.
@@ -145,6 +119,59 @@ constexpr std::array<int, 32> build_expected_piece_values() {
 inline constexpr auto kMaskPopcounts = build_mask_popcounts();
 inline constexpr auto kExpectedPieceValues = build_expected_piece_values();
 inline constexpr std::uint16_t kBoardMask = (1U << board_size) - 1U;
+inline constexpr std::uint16_t kMidBoardMask = 0b000111'111000U;
+inline constexpr std::uint16_t kCenterSpineMask = 0b010010'010010U;
+inline constexpr std::uint16_t kSouthBackRankMask = 0b000000'000111U;
+inline constexpr std::uint16_t kNorthBackRankMask = 0b111000'000000U;
+inline constexpr int kOriginPieceCount = 4;
+
+struct OmegaBitmaskTables {
+    std::array<std::array<std::uint32_t, 16>, kOriginPieceCount> slot_valid_worlds{};
+    std::array<std::uint32_t, kOriginPieceCount> slot_lion_worlds{};
+};
+
+/// @brief Converts a five-bit animal form mask into its four-bit CH/G/E/L lineage mask.
+/// @param forms Five-bit animal form mask.
+/// @return Four-bit lineage capability mask.
+constexpr std::uint8_t to_lineage_bits(Mask forms) {
+    std::uint8_t result = 0;
+    if ((forms & (bit(Animal::Chick) | bit(Animal::Hen))) != 0)
+        result |= 1U << 0U;
+    if ((forms & bit(Animal::Giraffe)) != 0)
+        result |= 1U << 1U;
+    if ((forms & bit(Animal::Elephant)) != 0)
+        result |= 1U << 2U;
+    if ((forms & bit(Animal::Lion)) != 0)
+        result |= 1U << 3U;
+    return result;
+}
+
+/// @brief Builds the 320-byte compile-time 24-bit permutation bitmask tables for Omega worlds.
+/// @return Compile-time Omega bitmask tables.
+constexpr OmegaBitmaskTables build_omega_bitmask_tables() {
+    constexpr int perms[24][4] = {
+        {0, 1, 2, 3}, {0, 1, 3, 2}, {0, 2, 1, 3}, {0, 2, 3, 1}, {0, 3, 1, 2}, {0, 3, 2, 1},
+        {1, 0, 2, 3}, {1, 0, 3, 2}, {1, 2, 0, 3}, {1, 2, 3, 0}, {1, 3, 0, 2}, {1, 3, 2, 0},
+        {2, 0, 1, 3}, {2, 0, 3, 1}, {2, 1, 0, 3}, {2, 1, 3, 0}, {2, 3, 0, 1}, {2, 3, 1, 0},
+        {3, 0, 1, 2}, {3, 0, 2, 1}, {3, 1, 0, 2}, {3, 1, 2, 0}, {3, 2, 0, 1}, {3, 2, 1, 0},
+    };
+    OmegaBitmaskTables tables{};
+    for (int p = 0; p < 24; ++p) {
+        const std::uint32_t p_bit = 1U << static_cast<unsigned>(p);
+        for (int slot = 0; slot < kOriginPieceCount; ++slot) {
+            const int animal = perms[p][slot];
+            if (animal == 3)
+                tables.slot_lion_worlds[slot] |= p_bit;
+            for (unsigned mask = 0; mask < 16U; ++mask) {
+                if ((mask & (1U << static_cast<unsigned>(animal))) != 0)
+                    tables.slot_valid_worlds[slot][mask] |= p_bit;
+            }
+        }
+    }
+    return tables;
+}
+
+inline constexpr auto kOmegaBitmaskTables = build_omega_bitmask_tables();
 
 /// @brief Counts Lion-capable pieces currently owned by a side.
 /// @param state Source state.
@@ -157,36 +184,6 @@ int lion_candidate_count(const State& state, Side owner) {
             ++count;
     }
     return count;
-}
-
-/// @brief Counts locally reachable destinations without full transition validation.
-/// @param state Source state.
-/// @param side Side whose mobility is counted.
-/// @return Geometric mobility count.
-int geometric_mobility(const State& state, Side side) {
-    int result = 0;
-    const auto& tables = move_tables();
-    for (int piece = 0; piece < physical_piece_count; ++piece) {
-        if (!owned_by(state, piece, side))
-            continue;
-        if (is_hand_position(state.pos[piece])) {
-            for (int square = 0; square < board_size; ++square) {
-                if (state.board[square] == kEmptyBoardSquare)
-                    ++result;
-            }
-            continue;
-        }
-        const auto destinations =
-            tables.quantum_move_table[state.mask[piece]][side_index(side)][state.pos[piece]];
-        for (int square = 0; square < board_size; ++square) {
-            if ((destinations & (1U << square)) == 0)
-                continue;
-            const int occupant = state.board[square];
-            if (occupant < 0 || !owned_by(state, occupant, side))
-                ++result;
-        }
-    }
-    return result;
 }
 
 /// @brief Tests whether a terminal state was won by a selected side.
@@ -363,11 +360,14 @@ void AlphaBetaEngine::store(
         else if (depth >= entry.depth)
             ++stats_.tt_depth_replacements;
     }
+    const bool preserve_existing_move =
+        entry.key == key && bound == BoundType::Upper && entry.move16 != kInvalidPackedMove;
     entry.key = key;
     entry.depth = static_cast<std::int16_t>(depth);
     entry.score = score_to_tt(score, ply);
     entry.flag = static_cast<std::uint8_t>(bound);
-    entry.move16 = pack_move(move);
+    if (!preserve_existing_move)
+        entry.move16 = pack_move(move);
     entry.age = age_;
     entry.generation = age_;
 }
@@ -399,61 +399,335 @@ int AlphaBetaEngine::terminal_score(const State& state, int ply) const {
     return 0;
 }
 
+struct TacticalSummary {
+    std::array<std::uint16_t, 2> occupancy{};
+    std::array<std::uint16_t, 2> attack_mask{};
+    std::array<std::uint16_t, 2> double_attack_mask{};
+    std::array<std::uint16_t, 2> orth_attack_mask{};
+    std::array<std::uint16_t, 2> diag_attack_mask{};
+    std::array<std::uint16_t, 2> lion_board_mask{};
+    std::array<std::uint16_t, 2> checker_mask{};
+    std::array<int, 2> mobility{};
+    std::array<int, 2> safe_mobility{};
+    std::array<int, 2> safe_drops{};
+    std::array<int, 2> hand_pieces{};
+    std::array<int, 2> lion_candidates{};
+    std::array<int, 2> origin_worlds{};
+    std::array<std::uint8_t, physical_piece_count> lion_prob_24{};
+};
+
+/// @brief Populates exact Omega-World marginal probabilities for one origin using 24-bit bitmasks.
+/// @param state Source state.
+/// @param origin Origin group to inspect.
+/// @param summary Tactical summary receiving world count and Lion probabilities.
+void populate_origin_omega(const State& state, Side origin, TacticalSummary& summary) {
+    std::array<int, kOriginPieceCount> pieces{};
+    int count = 0;
+    std::uint32_t valid_worlds = 0x00FF'FFFFU;
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (!originated_from(state, piece, origin))
+            continue;
+        if (count < kOriginPieceCount) {
+            pieces[count] = piece;
+            valid_worlds &=
+                kOmegaBitmaskTables.slot_valid_worlds[count][to_lineage_bits(state.mask[piece])];
+            ++count;
+        }
+    }
+    const int worlds = std::max(1, constant_popcount(valid_worlds));
+    summary.origin_worlds[side_index(origin)] = worlds;
+    for (int idx = 0; idx < count; ++idx) {
+        const int piece = pieces[idx];
+        if (!contains(state.mask[piece], Animal::Lion)) {
+            summary.lion_prob_24[piece] = 0;
+            continue;
+        }
+        const int lion_worlds =
+            constant_popcount(valid_worlds & kOmegaBitmaskTables.slot_lion_worlds[idx]);
+        summary.lion_prob_24[piece] =
+            static_cast<std::uint8_t>((lion_worlds * 24 + worlds / 2) / worlds);
+    }
+}
+
+/// @brief Populates multi-layer 12-bit attack masks, occupancy, and safe mobility metrics.
+/// @param state Source state.
+/// @param summary Tactical summary to populate.
+void populate_tactical_bitboards(const State& state, TacticalSummary& summary) {
+    const auto& tables = move_tables();
+    int empty_count = 0;
+    std::uint16_t empty_mask = 0;
+    for (int square = 0; square < board_size; ++square) {
+        const int piece = state.board[square];
+        if (piece < 0) {
+            ++empty_count;
+            empty_mask |= static_cast<std::uint16_t>(1U << square);
+        } else {
+            const int owner = (state.owner_bits >> piece) & 1U;
+            summary.occupancy[owner] |= static_cast<std::uint16_t>(1U << square);
+        }
+    }
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        const int owner = (state.owner_bits >> piece) & 1U;
+        const Mask mask = state.mask[piece];
+        if (contains(mask, Animal::Lion))
+            ++summary.lion_candidates[owner];
+        if (is_hand_position(state.pos[piece])) {
+            ++summary.hand_pieces[owner];
+            summary.mobility[owner] += empty_count;
+            continue;
+        }
+        const int sq = state.pos[piece];
+        const std::uint16_t attacks = tables.quantum_move_table[mask][owner][sq];
+        summary.double_attack_mask[owner] |=
+            static_cast<std::uint16_t>(summary.attack_mask[owner] & attacks);
+        summary.attack_mask[owner] |= attacks;
+        if ((mask & (bit(Animal::Giraffe) | bit(Animal::Hen) | bit(Animal::Lion) |
+                     bit(Animal::Chick))) != 0) {
+            summary.orth_attack_mask[owner] |=
+                tables.move_table[static_cast<int>(Animal::Giraffe)][owner][sq] & attacks;
+        }
+        if ((mask & (bit(Animal::Elephant) | bit(Animal::Hen) | bit(Animal::Lion))) != 0) {
+            summary.diag_attack_mask[owner] |=
+                tables.move_table[static_cast<int>(Animal::Elephant)][owner][sq] & attacks;
+        }
+        if (contains(mask, Animal::Lion))
+            summary.lion_board_mask[owner] |= static_cast<std::uint16_t>(1U << sq);
+    }
+    for (int owner = 0; owner < 2; ++owner) {
+        const std::uint16_t enemy_att = summary.attack_mask[1 - owner];
+        summary.safe_drops[owner] =
+            popcount_board(static_cast<std::uint16_t>(empty_mask & ~enemy_att));
+    }
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (is_hand_position(state.pos[piece]))
+            continue;
+        const int owner = (state.owner_bits >> piece) & 1U;
+        const Mask mask = state.mask[piece];
+        const std::uint16_t destinations = tables.quantum_move_table[mask][owner][state.pos[piece]];
+        if ((destinations & summary.lion_board_mask[1 - owner]) != 0) {
+            summary.checker_mask[owner] |= static_cast<std::uint16_t>(1U << state.pos[piece]);
+        }
+        const std::uint16_t available = static_cast<std::uint16_t>(
+            destinations & static_cast<std::uint16_t>(~summary.occupancy[owner]) & kBoardMask);
+        summary.mobility[owner] += popcount_board(available);
+        const std::uint16_t safe_zone =
+            mask == bit(Animal::Lion) ? static_cast<std::uint16_t>(~summary.attack_mask[1 - owner])
+                                      : static_cast<std::uint16_t>(~summary.attack_mask[1 - owner] |
+                                                                   summary.attack_mask[owner]);
+        summary.safe_mobility[owner] +=
+            popcount_board(static_cast<std::uint16_t>(available & safe_zone));
+    }
+}
+
+/// @brief Scores piece coordination, battery focal fire, and Zugzwang squeeze compression.
+/// @param summary Precomputed tactical bitboard summary.
+/// @return South-perspective coordination and squeeze score.
+int score_coordination_and_squeeze(const TacticalSummary& summary) {
+    int south_score = 18 * (summary.mobility[0] - summary.mobility[1]) +
+                      8 * (summary.safe_mobility[0] - summary.safe_mobility[1]);
+    for (int owner = 0; owner < 2; ++owner) {
+        const int sign = owner == 0 ? 1 : -1;
+        const int opp = 1 - owner;
+        const std::uint16_t defended =
+            static_cast<std::uint16_t>(summary.occupancy[owner] & summary.attack_mask[owner]);
+        south_score += sign * 20 * popcount_board(defended);
+        south_score +=
+            sign * 12 * popcount_board(static_cast<std::uint16_t>(defended & kMidBoardMask));
+        const std::uint16_t battery_targets =
+            static_cast<std::uint16_t>(summary.double_attack_mask[owner] & summary.occupancy[opp] &
+                                       ~summary.double_attack_mask[opp]);
+        south_score += sign * 42 * popcount_board(battery_targets);
+        const std::uint16_t web_synergy = static_cast<std::uint16_t>(
+            summary.orth_attack_mask[owner] & summary.diag_attack_mask[owner] & kMidBoardMask);
+        south_score += sign * 10 * popcount_board(web_synergy);
+
+        if (summary.safe_mobility[owner] == 0)
+            south_score -= sign * 120;
+        else if (summary.safe_mobility[owner] == 1)
+            south_score -= sign * 45;
+        if (summary.hand_pieces[owner] > 0 && summary.safe_drops[owner] == 0)
+            south_score -= sign * 35 * summary.hand_pieces[owner];
+    }
+    return south_score;
+}
+
+/// @brief Scores King-ring encirclement, Try corridors, quantum exposure, and sound bait.
+/// @param state Source state.
+/// @param summary Precomputed tactical summary.
+/// @return South-perspective siege, Try, quantum info, and bait score.
+int score_siege_try_and_bait(const State& state, const TacticalSummary& summary) {
+    const auto& tables = move_tables();
+    const int mover_idx = side_index(state.side_to_move);
+    int south_score = 85 * (summary.lion_candidates[0] - summary.lion_candidates[1]) +
+                      4 * (summary.origin_worlds[0] - summary.origin_worlds[1]);
+    for (int owner = 0; owner < 2; ++owner) {
+        const int sign = owner == 0 ? 1 : -1;
+        if (summary.lion_candidates[owner] == 1)
+            south_score -= sign * 80;
+    }
+
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        const int owner = (state.owner_bits >> piece) & 1U;
+        const int opp = 1 - owner;
+        const int sign = owner == 0 ? 1 : -1;
+        const Side owner_side = owner == 0 ? Side::South : Side::North;
+        const Mask mask = state.mask[piece];
+        const bool on_board = state.pos[piece] < board_size;
+        const int lion_w = contains(mask, Animal::Lion)
+                               ? std::max(1, static_cast<int>(summary.lion_prob_24[piece]))
+                               : 0;
+
+        if (lion_w > 0) {
+            if (!on_board) {
+                if (mask == bit(Animal::Lion))
+                    south_score -= sign * 900;
+                continue;
+            }
+            const int sq = state.pos[piece];
+            const bool under_fire = (summary.attack_mask[opp] & (1U << sq)) != 0;
+            const std::uint16_t ring = tables.move_table[static_cast<int>(Animal::Lion)][owner][sq];
+            const int ring_attacks =
+                popcount_board(static_cast<std::uint16_t>(ring & summary.attack_mask[opp]));
+            south_score -= sign * 2 * ring_attacks * lion_w;
+            if (under_fire) {
+                const bool undefended_single_check =
+                    owner == mover_idx && popcount_board(summary.checker_mask[opp]) == 1 &&
+                    (summary.checker_mask[opp] & summary.attack_mask[opp]) == 0;
+                if (undefended_single_check) {
+                    south_score -= sign * 90;
+                } else {
+                    south_score -= sign * (mask == bit(Animal::Lion) ? 720 : (140 + 6 * lion_w));
+                    if ((summary.double_attack_mask[opp] & (1U << sq)) != 0)
+                        south_score -= sign * 120;
+                    const std::uint16_t safe_ring = static_cast<std::uint16_t>(
+                        ring & ~summary.occupancy[owner] & ~summary.attack_mask[opp] & kBoardMask);
+                    if (safe_ring == 0)
+                        south_score -= sign * 16 * lion_w;
+                }
+            }
+
+            const int prog = progress_to_try(sq, owner_side);
+            south_score += sign * prog * (mask == bit(Animal::Lion) ? 95 : 28);
+            const std::uint16_t back_rank = owner == 0 ? kSouthBackRankMask : kNorthBackRankMask;
+            if (prog == 3) {
+                if (!under_fire) {
+                    south_score += sign * (28'000 + 80 * lion_w);
+                } else if (summary.lion_candidates[owner] >= 2) {
+                    south_score += sign * 180;
+                }
+            } else if (prog == 2) {
+                const std::uint16_t try_steps =
+                    static_cast<std::uint16_t>(tables.quantum_move_table[mask][owner][sq] &
+                                               back_rank & ~summary.occupancy[owner]);
+                const std::uint16_t safe_try =
+                    static_cast<std::uint16_t>(try_steps & ~summary.attack_mask[opp]);
+                if (safe_try != 0) {
+                    const int safe_count = popcount_board(safe_try);
+                    if (mover_idx == owner) {
+                        south_score += sign * (1800 + 30 * lion_w + (safe_count >= 2 ? 700 : 0));
+                    } else {
+                        south_score += sign * (360 + 12 * lion_w + (safe_count >= 2 ? 600 : 0));
+                    }
+                }
+            }
+        }
+
+        if (on_board && mask != bit(Animal::Lion)) {
+            const int sq = state.pos[piece];
+            const bool under_fire = (summary.attack_mask[opp] & (1U << sq)) != 0;
+            if (!under_fire)
+                continue;
+            const bool defended = (summary.attack_mask[owner] & (1U << sq)) != 0;
+            const std::uint16_t piece_att = tables.quantum_move_table[mask][owner][sq];
+            const std::uint16_t back_rank = owner == 0 ? kSouthBackRankMask : kNorthBackRankMask;
+            const bool tactical_threat =
+                (piece_att & (summary.lion_board_mask[opp] | back_rank)) != 0;
+            const bool quantum_bait =
+                defended && lion_w > 0 && lion_w < 24 && summary.lion_candidates[owner] >= 2;
+            if ((defended && tactical_threat) || quantum_bait) {
+                south_score += sign * 35;
+            } else if (!defended) {
+                south_score -= sign * 38;
+            }
+        }
+    }
+    return south_score;
+}
+
+/// @brief Tests whether a side has an immediate legal Catch transition using bitboard prefiltering.
+/// @param state Source state.
+/// @param summary Precomputed tactical bitboard summary.
+/// @param side Side to test as the mover.
+/// @param candidates Reusable candidate move buffer.
+/// @param profile Optional per-component timing sink.
+/// @return `true` when at least one capture immediately wins for `side`.
+bool has_targeted_immediate_catch(const State& state,
+                                  const TacticalSummary& summary,
+                                  Side side,
+                                  std::vector<Move>& candidates,
+                                  EvalComponentProfile* profile) {
+    const int s_idx = side_index(side);
+    const std::uint16_t target_lions = summary.lion_board_mask[1 - s_idx];
+    if ((summary.attack_mask[s_idx] & target_lions) == 0)
+        return false;
+
+    const auto& tables = move_tables();
+    {
+        ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_filter);
+        candidates.clear();
+        for (int piece = 0; piece < physical_piece_count; ++piece) {
+            if (((state.owner_bits >> piece) & 1U) != static_cast<unsigned>(s_idx) ||
+                state.pos[piece] >= board_size) {
+                continue;
+            }
+            std::uint16_t hits = static_cast<std::uint16_t>(
+                tables.quantum_move_table[state.mask[piece]][s_idx][state.pos[piece]] &
+                target_lions);
+            while (hits != 0) {
+                int to_sq = 0;
+                while (((hits >> to_sq) & 1U) == 0)
+                    ++to_sq;
+                candidates.push_back(Move{static_cast<std::uint8_t>(piece),
+                                          state.pos[piece],
+                                          static_cast<std::uint8_t>(to_sq)});
+                hits &= static_cast<std::uint16_t>(hits - 1U);
+            }
+        }
+    }
+    if (candidates.empty())
+        return false;
+
+    State copy;
+    {
+        ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_setup);
+        copy = state;
+        copy.side_to_move = side;
+        copy.terminal = Terminal::None;
+        copy.winner = kNoWinner;
+    }
+    for (const Move& move : candidates) {
+        Undo undo;
+        bool applied = false;
+        {
+            ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_transition);
+            applied = apply_move(copy, move, undo);
+        }
+        if (applied && is_terminal_win_for(copy, side))
+            return true;
+        if (applied)
+            undo_move(copy, undo);
+    }
+    return false;
+}
+
 AlphaBetaEngine::EvalScratch::EvalScratch() {
     pseudo_moves.reserve(128);
     immediate_candidates.reserve(32);
 }
 
 int AlphaBetaEngine::evaluate_baseline(const State& state, EvalComponentProfile* profile) const {
-    {
-        ComponentTimer timer(profile == nullptr ? nullptr : &profile->terminal);
-        if (state.terminal != Terminal::None)
-            return terminal_score(state, 0);
-    }
-
-    int south_score = 0;
-    {
-        ComponentTimer timer(profile == nullptr ? nullptr : &profile->material_mask);
-        for (int piece = 0; piece < physical_piece_count; ++piece) {
-            const Side owner = owned_by(state, piece, Side::South) ? Side::South : Side::North;
-            const int sign = owner == Side::South ? 1 : -1;
-            const Mask mask = state.mask[piece];
-            south_score += sign * expected_piece_value(mask);
-            south_score += sign * (popcount(mask) - 1) * 12;
-        }
-    }
-    {
-        ComponentTimer timer(profile == nullptr ? nullptr : &profile->lion_safety);
-        for (int piece = 0; piece < physical_piece_count; ++piece) {
-            const Side owner = owned_by(state, piece, Side::South) ? Side::South : Side::North;
-            const int sign = owner == Side::South ? 1 : -1;
-            const Mask mask = state.mask[piece];
-            if (!contains(mask, Animal::Lion))
-                continue;
-            const bool on_board = state.pos[piece] < board_size;
-            if (on_board && is_square_attacked(state, state.pos[piece], opposite(owner)))
-                south_score -= sign * (mask == bit(Animal::Lion) ? 700 : 180);
-            if (on_board) {
-                south_score += sign * progress_to_try(state.pos[piece], owner) *
-                               (mask == bit(Animal::Lion) ? 90 : 25);
-            }
-            if (mask == bit(Animal::Lion) && !on_board)
-                south_score -= sign * 900;
-        }
-        south_score += 80 * (lion_candidate_count(state, Side::South) -
-                             lion_candidate_count(state, Side::North));
-    }
-    {
-        ComponentTimer timer(profile == nullptr ? nullptr : &profile->mobility);
-        south_score +=
-            18 * (geometric_mobility(state, Side::South) - geometric_mobility(state, Side::North));
-    }
-
-    if (side_has_immediate_win(state, Side::South, profile))
-        south_score += 3500;
-    if (side_has_immediate_win(state, Side::North, profile))
-        south_score -= 3500;
-    return state.side_to_move == Side::South ? south_score : -south_score;
+    EvalScratch scratch;
+    return evaluate_optimized(state, scratch, profile);
 }
 
 int AlphaBetaEngine::evaluate_optimized(const State& state,
@@ -465,9 +739,12 @@ int AlphaBetaEngine::evaluate_optimized(const State& state,
             return terminal_score(state, 0);
     }
 
+    TacticalSummary summary{};
     int south_score = 0;
     {
         ComponentTimer timer(profile == nullptr ? nullptr : &profile->material_mask);
+        populate_origin_omega(state, Side::South, summary);
+        populate_origin_omega(state, Side::North, summary);
         for (int piece = 0; piece < physical_piece_count; ++piece) {
             const int owner = (state.owner_bits >> piece) & 1U;
             const int sign = owner == 0 ? 1 : -1;
@@ -476,117 +753,35 @@ int AlphaBetaEngine::evaluate_optimized(const State& state,
             south_score += sign * (kMaskPopcounts[mask] - 1) * 12;
         }
     }
-
-    const auto& tables = move_tables();
     {
         ComponentTimer timer(profile == nullptr ? nullptr : &profile->mobility);
-        scratch.occupancy = {};
-        scratch.mobility = {};
-        int empty_count = 0;
-        for (int square = 0; square < board_size; ++square) {
-            const int piece = state.board[square];
-            if (piece < 0) {
-                ++empty_count;
-            } else {
-                const int owner = (state.owner_bits >> piece) & 1U;
-                scratch.occupancy[owner] |= static_cast<std::uint16_t>(1U << square);
-            }
-        }
-        for (int piece = 0; piece < physical_piece_count; ++piece) {
-            const int owner = (state.owner_bits >> piece) & 1U;
-            if (is_hand_position(state.pos[piece])) {
-                scratch.mobility[owner] += empty_count;
-                continue;
-            }
-            const std::uint16_t destinations =
-                tables.quantum_move_table[state.mask[piece]][owner][state.pos[piece]];
-            const std::uint16_t available = static_cast<std::uint16_t>(
-                destinations & static_cast<std::uint16_t>(~scratch.occupancy[owner]) & kBoardMask);
-            scratch.mobility[owner] += popcount_board(available);
-        }
-        south_score += 18 * (scratch.mobility[0] - scratch.mobility[1]);
+        populate_tactical_bitboards(state, summary);
+        south_score += score_coordination_and_squeeze(summary);
     }
     {
         ComponentTimer timer(profile == nullptr ? nullptr : &profile->lion_safety);
-        scratch.attack_mask = {};
-        scratch.lion_candidates = {};
-        for (int piece = 0; piece < physical_piece_count; ++piece) {
-            const int owner = (state.owner_bits >> piece) & 1U;
-            if (state.pos[piece] < board_size) {
-                scratch.attack_mask[owner] |=
-                    tables.quantum_move_table[state.mask[piece]][owner][state.pos[piece]];
-            }
-            if (contains(state.mask[piece], Animal::Lion))
-                ++scratch.lion_candidates[owner];
-        }
-        for (int piece = 0; piece < physical_piece_count; ++piece) {
-            const Mask mask = state.mask[piece];
-            if (!contains(mask, Animal::Lion))
-                continue;
-            const int owner = (state.owner_bits >> piece) & 1U;
-            const int sign = owner == 0 ? 1 : -1;
-            const bool on_board = state.pos[piece] < board_size;
-            if (on_board && (scratch.attack_mask[1 - owner] & (1U << state.pos[piece])) != 0) {
-                south_score -= sign * (mask == bit(Animal::Lion) ? 700 : 180);
-            }
-            if (on_board) {
-                const Side owner_side = owner == 0 ? Side::South : Side::North;
-                south_score += sign * progress_to_try(state.pos[piece], owner_side) *
-                               (mask == bit(Animal::Lion) ? 90 : 25);
-            }
-            if (mask == bit(Animal::Lion) && !on_board)
-                south_score -= sign * 900;
-        }
-        south_score += 80 * (scratch.lion_candidates[0] - scratch.lion_candidates[1]);
+        south_score += score_siege_try_and_bait(state, summary);
     }
 
-    auto has_immediate_win = [&](Side side) {
-        State copy;
-        {
-            ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_setup);
-            copy = state;
-            copy.side_to_move = side;
-            copy.terminal = Terminal::None;
-            copy.winner = kNoWinner;
-            recompute_hash(copy);
+    const Side mover = state.side_to_move;
+    const Side opp = opposite(mover);
+    const int mover_idx = side_index(mover);
+    const int opp_idx = 1 - mover_idx;
+    const int mover_sign = mover_idx == 0 ? 1 : -1;
+    if (has_targeted_immediate_catch(
+            state, summary, mover, scratch.immediate_candidates, profile)) {
+        south_score += mover_sign * 35'000;
+    } else {
+        const bool supported_or_double_check =
+            popcount_board(summary.checker_mask[opp_idx]) >= 2 ||
+            (summary.checker_mask[opp_idx] & summary.attack_mask[opp_idx]) != 0;
+        if (supported_or_double_check &&
+            has_targeted_immediate_catch(
+                state, summary, opp, scratch.immediate_candidates, profile)) {
+            south_score -= mover_sign * 2600;
         }
-        {
-            ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_movegen);
-            generate_pseudo_legal_moves(copy, scratch.pseudo_moves);
-        }
-        {
-            ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_filter);
-            scratch.immediate_candidates.clear();
-            const int back_rank = side == Side::South ? 0 : board_height - 1;
-            for (const Move& move : scratch.pseudo_moves) {
-                const int target = state.board[move.to];
-                const bool can_catch = target >= 0 && contains(state.mask[target], Animal::Lion);
-                const bool can_try = contains(state.mask[move.piece], Animal::Lion) &&
-                                     move.to / board_width == back_rank;
-                if (can_catch || can_try)
-                    scratch.immediate_candidates.push_back(move);
-            }
-        }
-        for (const Move& move : scratch.immediate_candidates) {
-            Undo undo;
-            bool applied = false;
-            {
-                ComponentTimer timer(profile == nullptr ? nullptr : &profile->immediate_transition);
-                applied = apply_move(copy, move, undo);
-            }
-            if (applied && is_terminal_win_for(copy, side))
-                return true;
-            if (applied)
-                undo_move(copy, undo);
-        }
-        return false;
-    };
-
-    if (has_immediate_win(Side::South))
-        south_score += 3500;
-    if (has_immediate_win(Side::North))
-        south_score -= 3500;
-    return state.side_to_move == Side::South ? south_score : -south_score;
+    }
+    return mover_idx == 0 ? south_score : -south_score;
 }
 
 int AlphaBetaEngine::evaluate(const State& state) const {
@@ -640,6 +835,9 @@ int AlphaBetaEngine::move_order_score(const State& state,
                                       int ply) {
     if (options_.tt_move_ordering_enabled && move == tt_move)
         return 2'000'000;
+    const Side mover = state.side_to_move;
+    const Side enemy = opposite(mover);
+    const int mover_idx = side_index(mover);
     int score = 0;
     if (options_.killer_enabled && ply < static_cast<int>(killers_.size())) {
         if (move == killers_[ply][0])
@@ -647,27 +845,35 @@ int AlphaBetaEngine::move_order_score(const State& state,
         else if (move == killers_[ply][1])
             score += 160'000;
     }
-    if (options_.history_enabled) {
-        score += history_[side_index(state.side_to_move)][move.from][move.to];
+    if (ply > 0 && ply < static_cast<int>(kMaxSearchPly)) {
+        const Move& prev = ply_move_[static_cast<std::size_t>(ply - 1)];
+        if (prev.valid() && move == countermoves_[mover_idx][prev.from][prev.to])
+            score += 145'000;
     }
-    const int target = state.board[move.to];
-    if (target >= 0 && options_.capture_ordering_enabled) {
-        score += 250'000 + expected_piece_value(state.mask[target]) * 20;
-        if (state.mask[target] == bit(Animal::Lion))
-            score += 1'000'000;
+    if (options_.history_enabled) {
+        score += history_[mover_idx][move.from][move.to];
     }
 
-    const Mask move_mask =
-        move.from < board_size
-            ? move_tables().move_possible_mask[side_index(state.side_to_move)][move.from][move.to]
-            : state.mask[move.piece];
+    const int target = state.board[move.to];
+    const Mask piece_mask = state.mask[move.piece];
+    if (target >= 0 && options_.capture_ordering_enabled) {
+        score += 250'000 + kExpectedPieceValues[state.mask[target]] * 20;
+        if (state.mask[target] == bit(Animal::Lion))
+            score += 1'000'000;
+        else if (contains(state.mask[target], Animal::Lion))
+            score += 320'000;
+    }
+
+    const Mask move_mask = move.from < board_size
+                               ? move_tables().move_possible_mask[mover_idx][move.from][move.to]
+                               : piece_mask;
     if (options_.mask_collapse_ordering_enabled) {
-        score += (popcount(state.mask[move.piece]) -
-                  popcount(static_cast<Mask>(state.mask[move.piece] & move_mask))) *
+        score += (kMaskPopcounts[piece_mask] -
+                  kMaskPopcounts[static_cast<Mask>(piece_mask & move_mask)]) *
                  12'000;
     }
-    if (options_.try_threat_ordering_enabled && contains(state.mask[move.piece], Animal::Lion) &&
-        move.to / board_width == (state.side_to_move == Side::South ? 0 : board_height - 1)) {
+    if (options_.try_threat_ordering_enabled && contains(piece_mask, Animal::Lion) &&
+        move.to / board_width == (mover == Side::South ? 0 : board_height - 1)) {
         score += 30'000;
     }
     if (!options_.strong_ordering_enabled || ply > 0)
@@ -677,22 +883,21 @@ int AlphaBetaEngine::move_order_score(const State& state,
     Undo undo;
     if (!apply_search_move(after, move, undo))
         return -2'000'000;
-    if (options_.immediate_win_ordering_enabled && is_terminal_win_for(after, state.side_to_move)) {
+    if (options_.immediate_win_ordering_enabled && is_terminal_win_for(after, mover)) {
         return 1'500'000 + score;
     }
-    const int before_lions = lion_candidate_count(state, after.side_to_move);
-    const int after_lions = lion_candidate_count(after, after.side_to_move);
+    const int before_lions = lion_candidate_count(state, enemy);
+    const int after_lions = lion_candidate_count(after, enemy);
     if (options_.lion_reduction_ordering_enabled)
         score += (before_lions - after_lions) * 70'000;
-    if (options_.prevent_loss_ordering_enabled &&
-        side_has_immediate_win(state, opposite(state.side_to_move), nullptr) &&
-        !side_has_immediate_win(after, after.side_to_move, nullptr)) {
+    if (options_.prevent_loss_ordering_enabled && side_has_immediate_win(state, enemy, nullptr) &&
+        !side_has_immediate_win(after, enemy, nullptr)) {
         score += 400'000;
     }
     if (after.pos[move.piece] < board_size && contains(after.mask[move.piece], Animal::Lion)) {
-        score += progress_to_try(after.pos[move.piece], state.side_to_move) * 4000;
+        score += progress_to_try(after.pos[move.piece], mover) * 4000;
         if (after.mask[move.piece] == bit(Animal::Lion) &&
-            is_square_attacked(after, after.pos[move.piece], after.side_to_move)) {
+            is_square_attacked(after, after.pos[move.piece], enemy)) {
             score -= 180'000;
         }
     }
@@ -708,10 +913,57 @@ void AlphaBetaEngine::order_moves(const State& state,
     if (options_.benchmark_instrumentation_enabled) {
         begin = std::chrono::steady_clock::now();
     }
+    const auto& tables = move_tables();
+    const int mover_idx = side_index(state.side_to_move);
+    std::uint16_t mover_att = 0;
+    std::uint16_t enemy_att = 0;
+    std::uint16_t enemy_lions = 0;
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (state.pos[piece] >= board_size)
+            continue;
+        const int owner = (state.owner_bits >> piece) & 1U;
+        const std::uint16_t att =
+            tables.quantum_move_table[state.mask[piece]][owner][state.pos[piece]];
+        if (owner == mover_idx) {
+            mover_att |= att;
+        } else {
+            enemy_att |= att;
+            if (contains(state.mask[piece], Animal::Lion))
+                enemy_lions |= static_cast<std::uint16_t>(1U << state.pos[piece]);
+        }
+    }
+
     auto& scored = score_pool_[std::min<std::size_t>(ply, kMaxSearchPly - 1)];
     scored.clear();
+    const int back_rank = mover_idx == 0 ? 0 : board_height - 1;
+    const int own_home_rank = mover_idx == 0 ? board_height - 1 : 0;
+    const std::uint16_t back_rank_mask = mover_idx == 0 ? kSouthBackRankMask : kNorthBackRankMask;
     for (const Move& move : moves) {
-        scored.emplace_back(move_order_score(state, move, tt_move, ply), move);
+        int score = move_order_score(state, move, tt_move, ply);
+        const Mask piece_mask = state.mask[move.piece];
+        const Mask move_mask = move.from < board_size
+                                   ? tables.move_possible_mask[mover_idx][move.from][move.to]
+                                   : piece_mask;
+        const Mask collapsed = static_cast<Mask>(piece_mask & move_mask);
+        const bool dest_attacked = (enemy_att & (1U << move.to)) != 0;
+        const std::uint16_t next_att = tables.quantum_move_table[collapsed][mover_idx][move.to];
+        if (move.to / board_width == own_home_rank && (enemy_lions & (1U << move.to)) != 0)
+            score += 650'000;
+        if ((next_att & enemy_lions) != 0 && !dest_attacked)
+            score += 45'000;
+        if (contains(collapsed, Animal::Lion)) {
+            if (move.to / board_width == back_rank && !dest_attacked) {
+                score += 420'000;
+            } else if (!dest_attacked && (next_att & back_rank_mask & ~enemy_att) != 0) {
+                score += 85'000;
+            }
+        }
+        if (piece_mask == bit(Animal::Lion) && dest_attacked)
+            score -= 550'000;
+        else if (state.board[move.to] < 0 && dest_attacked && (mover_att & (1U << move.to)) != 0 &&
+                 (next_att & enemy_lions) != 0)
+            score += 28'000;
+        scored.emplace_back(score, move);
     }
     std::stable_sort(scored.begin(), scored.end(), [](const auto& left, const auto& right) {
         return left.first > right.first;
@@ -787,7 +1039,7 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         return 0;
     if (state.terminal != Terminal::None)
         return terminal_score(state, ply);
-    if (depth == 0)
+    if (depth <= 0)
         return evaluate_search(state);
 
     const int original_alpha = alpha;
@@ -828,11 +1080,20 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         ++stats_.tt_move_used;
     }
 
+    const Side mover = state.side_to_move;
+    const bool in_squeeze = moves.size() <= 2;
     int best = -search_infinity;
     Move best_move;
     bool first = true;
     int move_index = 0;
     for (const Move& move : moves) {
+        const bool is_capture = state.board[move.to] != kEmptyBoardSquare;
+        const bool is_lion_move = contains(state.mask[move.piece], Animal::Lion);
+        const bool is_killer = ply < static_cast<int>(killers_.size()) &&
+                               (move == killers_[ply][0] || move == killers_[ply][1]);
+        if (ply < static_cast<int>(kMaxSearchPly))
+            ply_move_[static_cast<std::size_t>(ply)] = move;
+
         Undo undo;
         if (!apply_search_move(state, move, undo))
             continue;
@@ -840,7 +1101,17 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         if (first || !options_.pvs_enabled) {
             score = -negamax(state, depth - 1, -beta, -alpha, ply + 1);
         } else {
-            score = -negamax(state, depth - 1, -alpha - 1, -alpha, ply + 1);
+            int reduction = 0;
+            if (depth >= 5 && move_index >= 6 && !in_squeeze && !is_capture && !is_lion_move &&
+                !is_killer && state.terminal == Terminal::None) {
+                reduction = 1;
+            }
+            if (reduction > 0) {
+                score = -negamax(state, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1);
+            }
+            if (reduction == 0 || (!stopped_ && score > alpha)) {
+                score = -negamax(state, depth - 1, -alpha - 1, -alpha, ply + 1);
+            }
             if (!stopped_ && score > alpha && score < beta) {
                 ++stats_.pvs_researches;
                 score = -negamax(state, depth - 1, -beta, -alpha, ply + 1);
@@ -851,9 +1122,11 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
             return 0;
         if (score > best) {
             best = score;
-            best_move = move;
-            if (options_.benchmark_instrumentation_enabled)
-                update_pv(ply, move);
+            if (first || score > original_alpha) {
+                best_move = move;
+                if (options_.benchmark_instrumentation_enabled)
+                    update_pv(ply, move);
+            }
         }
         alpha = std::max(alpha, score);
         if (alpha >= beta) {
@@ -863,7 +1136,7 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
                 ++stats_.first_move_cutoffs;
             if (move == tt_move)
                 ++stats_.tt_move_cutoffs;
-            const bool quiet = state.board[move.to] == kEmptyBoardSquare;
+            const bool quiet = !is_capture;
             if (quiet && options_.killer_enabled && ply < static_cast<int>(killers_.size())) {
                 if (killers_[ply][0] != move) {
                     killers_[ply][1] = killers_[ply][0];
@@ -871,8 +1144,14 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
                 }
                 ++stats_.killer_cutoffs;
             }
+            if (quiet && ply > 0 && ply < static_cast<int>(kMaxSearchPly)) {
+                const Move& prev = ply_move_[static_cast<std::size_t>(ply - 1)];
+                if (prev.valid()) {
+                    countermoves_[side_index(mover)][prev.from][prev.to] = move;
+                }
+            }
             if (quiet && options_.history_enabled) {
-                int& history = history_[side_index(state.side_to_move)][move.from][move.to];
+                int& history = history_[side_index(mover)][move.from][move.to];
                 history = std::min(500'000, history + depth * depth * 64);
                 ++history_updates_;
                 ++stats_.history_cutoffs;
@@ -925,6 +1204,7 @@ bool AlphaBetaEngine::search_root(
     for (const Move& move : moves) {
         if (should_stop())
             return false;
+        ply_move_[0] = move;
         Undo undo;
         if (!apply_search_move(state, move, undo))
             continue;
@@ -943,9 +1223,11 @@ bool AlphaBetaEngine::search_root(
             return false;
         if (score > best) {
             best = score;
-            local_best = move;
-            if (options_.benchmark_instrumentation_enabled)
-                update_pv(0, move);
+            if (first || score > alpha_original) {
+                local_best = move;
+                if (options_.benchmark_instrumentation_enabled)
+                    update_pv(0, move);
+            }
         }
         alpha = std::max(alpha, score);
         first = false;
@@ -970,6 +1252,8 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
     if (options_.tt_age_enabled)
         ++age_;
     killers_ = {};
+    countermoves_ = {};
+    ply_move_ = {};
     for (auto& side : history_)
         for (auto& from : side)
             for (int& value : from)

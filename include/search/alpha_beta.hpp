@@ -234,8 +234,18 @@ class AlphaBetaEngine {
     struct EvalScratch {
         std::array<std::uint16_t, 2> occupancy{};
         std::array<std::uint16_t, 2> attack_mask{};
+        std::array<std::uint16_t, 2> double_attack_mask{};
+        std::array<std::uint16_t, 2> orth_attack_mask{};
+        std::array<std::uint16_t, 2> diag_attack_mask{};
+        std::array<std::uint16_t, 2> lion_board_mask{};
         std::array<int, 2> mobility{};
+        std::array<int, 2> safe_mobility{};
+        std::array<int, 2> safe_drops{};
+        std::array<int, 2> hand_pieces{};
         std::array<int, 2> lion_candidates{};
+        std::array<int, 2> origin_worlds{};
+        std::array<std::uint8_t, physical_piece_count> lion_prob_24{};
+        std::array<int, physical_piece_count> entangled_value{};
         std::vector<Move> pseudo_moves{};
         std::vector<Move> immediate_candidates{};
 
@@ -254,8 +264,10 @@ class AlphaBetaEngine {
     std::uint8_t age_{0};
     std::array<std::array<Move, 2>, 64> killers_{};
     std::array<std::array<std::array<int, board_size>, external_source_count>, 2> history_{};
+    std::array<std::array<std::array<Move, board_size>, external_source_count>, 2> countermoves_{};
     std::uint64_t history_updates_{0};
     static constexpr std::size_t kMaxSearchPly = 256;
+    std::array<Move, kMaxSearchPly> ply_move_{};
     std::array<std::vector<Move>, kMaxSearchPly> move_pool_{};
     std::array<std::vector<Move>, kMaxSearchPly> candidate_pool_{};
     std::array<std::vector<std::pair<int, Move>>, kMaxSearchPly> score_pool_{};
