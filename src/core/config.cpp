@@ -90,6 +90,36 @@ std::string read_string(const std::string& json,
     return json.substr(quote + 1, end - quote - 1);
 }
 
+/// @brief Reads a flat JSON array of integers.
+/// @param json JSON text to scan.
+/// @param key Property name without quotes.
+/// @param fallback Value returned when the key is absent or malformed.
+/// @return Parsed integers or fallback.
+std::vector<int> read_int_array(const std::string& json,
+                                const std::string& key,
+                                const std::vector<int>& fallback) {
+    const auto colon = find_json_value_separator(json, key);
+    if (colon == std::string::npos)
+        return fallback;
+    const auto open = json.find('[', colon);
+    const auto close = json.find(']', colon);
+    if (open == std::string::npos || close == std::string::npos || open > close)
+        return fallback;
+    std::vector<int> values;
+    std::istringstream stream(json.substr(open + 1, close - open - 1));
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+        if (token.find_first_not_of(" \t\r\n") == std::string::npos)
+            continue;
+        try {
+            values.push_back(std::stoi(token));
+        } catch (const std::exception&) {
+            return fallback;
+        }
+    }
+    return values;
+}
+
 /// @brief Reads a numeric property and converts it to the destination type.
 /// @tparam T Numeric destination type.
 /// @param json JSON text to scan.
@@ -138,6 +168,27 @@ void apply_search_json(SearchConfig& config, const std::string& json) {
         read_number(json, "l_eq_min_duplicate_ratio", config.l_eq_min_duplicate_ratio);
     config.l_eq_require_duplicate_hand_hint = read_bool(
         json, "l_eq_require_duplicate_hand_hint", config.l_eq_require_duplicate_hand_hint);
+    config.qsearch_depth = number(json, "qsearch_depth", config.qsearch_depth);
+    config.dfpn_guard_enabled = read_bool(json, "dfpn_guard_enabled", config.dfpn_guard_enabled);
+    config.dfpn_guard_max_ply = number(json, "dfpn_guard_max_ply", config.dfpn_guard_max_ply);
+    config.eval_v2_enabled = read_bool(json, "eval_v2_enabled", config.eval_v2_enabled);
+    config.eval_v2_weights = read_int_array(json, "eval_v2_weights", config.eval_v2_weights);
+    config.nnue_enabled = read_bool(json, "nnue_enabled", config.nnue_enabled);
+    config.nnue_path = read_string(json, "nnue_path", config.nnue_path);
+    config.opening_random_plies = number(json, "opening_random_plies", config.opening_random_plies);
+    config.opening_random_margin =
+        number(json, "opening_random_margin", config.opening_random_margin);
+    config.opening_random_depth = number(json, "opening_random_depth", config.opening_random_depth);
+}
+
+/// @brief Applies JSON overrides owned by BookConfig.
+/// @param config Book configuration to mutate.
+/// @param json JSON override text.
+void apply_book_json(BookConfig& config, const std::string& json) {
+    config.enabled = read_bool(json, "book_enabled", config.enabled);
+    config.path = read_string(json, "book_path", config.path);
+    config.forbidden_enabled = read_bool(json, "forbidden_enabled", config.forbidden_enabled);
+    config.forbidden_path = read_string(json, "forbidden_path", config.forbidden_path);
 }
 
 /// @brief Applies JSON overrides owned by MoveOrderingConfig.
@@ -246,6 +297,7 @@ void apply_json(EngineConfig& config, const std::string& json) {
     apply_memory_json(config.memory, json);
     apply_instrumentation_json(config.instrumentation, json);
     apply_safety_json(config.safety, json);
+    apply_book_json(config.book, json);
 }
 
 }  // namespace

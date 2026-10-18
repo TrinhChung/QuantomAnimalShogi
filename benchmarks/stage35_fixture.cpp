@@ -126,6 +126,30 @@ Fixture selected_fixture(const std::string& name,
     return best;
 }
 
+// Scans every intermediate playout state, which finds rare properties that endpoint sampling
+// misses.
+Fixture first_matching_fixture(const std::string& name,
+                               const std::string& category,
+                               std::uint32_t seed,
+                               int maximum_ply,
+                               const std::function<bool(const State&)>& accept) {
+    std::mt19937 random(seed);
+    for (int attempt = 0; attempt < 4000; ++attempt) {
+        Fixture candidate;
+        candidate.name = name;
+        candidate.category = category;
+        candidate.seed = seed;
+        candidate.state = initial_state();
+        for (int ply = 0; ply < maximum_ply; ++ply) {
+            if (!play_random_nonterminal(candidate.state, candidate.action_sequence, random, 1))
+                break;
+            if (accept(candidate.state))
+                return candidate;
+        }
+    }
+    throw std::runtime_error("could not find fixture: " + name);
+}
+
 State safe_position(int plies, int salt) {
     State state = initial_state();
     for (int ply = 0; ply < plies; ++ply) {
@@ -152,14 +176,65 @@ State safe_position(int plies, int salt) {
     return state;
 }
 
-State duplicate_hands_position() {
-    State state = initial_state();
-    for (int piece : {0, 1}) {
-        state.board[state.pos[piece]] = -1;
-        state.pos[piece] = static_cast<std::uint8_t>(first_hand_slot + piece);
+// Interchangeable hand pieces (same owner, origin and mask) yield identical drop successors,
+// which is the workload L_eq grouping targets.
+int duplicate_hand_pairs(const State& state) {
+    int pairs = 0;
+    for (int left = 0; left < physical_piece_count; ++left) {
+        if (!is_hand_position(state.pos[left]) || !owned_by(state, left, state.side_to_move))
+            continue;
+        for (int right = left + 1; right < physical_piece_count; ++right) {
+            if (is_hand_position(state.pos[right]) && owned_by(state, right, state.side_to_move) &&
+                state.mask[left] == state.mask[right] &&
+                originated_from(state, left, Side::North) ==
+                    originated_from(state, right, Side::North)) {
+                ++pairs;
+            }
+        }
     }
-    recompute_hash(state);
-    return state;
+    return pairs;
+}
+
+bool owns_back_rank_lion_candidate(const State& state, Side side) {
+    const int back_row = side == Side::South ? 0 : board_height - 1;
+    for (int piece = 0; piece < physical_piece_count; ++piece) {
+        if (owned_by(state, piece, side) && state.pos[piece] < board_size &&
+            state.pos[piece] / board_width == back_row &&
+            contains(state.mask[piece], Animal::Lion)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Under the delayed Try rule a mover never wins by Try on its own move, so a near-Try position
+// offers a move that starts a pending Try which every opponent reply must concede.
+bool has_forced_try(const State& state) {
+    const Side mover = state.side_to_move;
+    for (const Move& move : generate_legal_moves(state)) {
+        State pending = state;
+        Undo undo;
+        if (!apply_move(pending, move, undo) || pending.terminal != Terminal::None ||
+            !owns_back_rank_lion_candidate(pending, mover)) {
+            continue;
+        }
+        const auto replies = generate_legal_moves(pending);
+        const bool forced =
+            !replies.empty() && std::all_of(replies.begin(), replies.end(), [&](const Move& reply) {
+                State answered = pending;
+                Undo reply_undo;
+                return apply_move(answered, reply, reply_undo) &&
+                       answered.terminal == Terminal::Try && answered.winner == side_index(mover);
+            });
+        if (forced)
+            return true;
+    }
+    return false;
+}
+
+void require_property(const Fixture& fixture, bool satisfied) {
+    if (!satisfied)
+        throw std::runtime_error("selected fixture lacks its defining property: " + fixture.name);
 }
 
 State near_catch_position() {
@@ -301,7 +376,11 @@ std::vector<Fixture> generate_stage35_fixtures() {
     fixtures.push_back(make_fixture("initial", "required", initial_state()));
     fixtures.push_back(make_fixture("safe_4ply", "required", safe_position(4, 1)));
     fixtures.push_back(make_fixture("safe_8ply", "required", safe_position(8, 3)));
-    fixtures.push_back(make_fixture("duplicate_hands", "required", duplicate_hands_position()));
+    fixtures.push_back(first_matching_fixture(
+        "duplicate_hands", "required", kFixtureSeed + 5U, 48, [](const State& state) {
+            return duplicate_hand_pairs(state) > 0 && generate_legal_moves(state).size() >= 24 &&
+                   !has_immediate_win(state);
+        }));
     State near_draw = initial_state();
     near_draw.turn = 252;
     recompute_hash(near_draw);
@@ -314,8 +393,9 @@ std::vector<Fixture> generate_stage35_fixtures() {
         kFixtureSeed + 1U,
         4,
         32,
-        [](const State& state) { return has_immediate_win(state, Terminal::Try) ? 1 : 0; },
+        [](const State& state) { return has_forced_try(state) ? 1 : 0; },
         1);
+    require_property(near_try, has_forced_try(near_try.state));
     fixtures.push_back(near_try);
     Fixture many_hands = selected_fixture(
         "many_hands",

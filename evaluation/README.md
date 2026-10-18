@@ -129,7 +129,11 @@ scripts\evaluate_built_candidate.bat --candidate-exe "build\current\Release\qas.
 
 ## Permanent corpus
 
-`corpus/manifest.json` freezes corpus revision 1 and the SHA-256 of `corpus-v1.jsonl`. Each fixture
+`corpus/manifest.json` freezes corpus revision 2 and the SHA-256 of `corpus-v2.jsonl`. Revision 2
+regenerates every position under the organizer's delayed-Try/Catch rules (commit `f0d661f`);
+revision 1 predates that change, contains `duplicate_hands` and `near_catch` states with a
+Lion-capable hand piece that the current rules treat as an already-won Catch, and remains on disk
+only to reproduce historical reports. Each fixture
 contains the complete native state, authoritative structural hash, deterministic seed and action
 sequence, turn/horizon/side, legal count, uncertainty, hand count, Lion-candidate counts, source,
 and category labels. The 256 positions include the trusted Stage 3.5 named positions and legal

@@ -9,7 +9,7 @@ This file is the entry point for all changes to Quantum Animal Shogi.
 3. Find or add tests that define the behavior being changed.
 4. Keep the patch limited to one coherent purpose.
 
-Do not implement a feature before understanding its module boundary. Do not mix rule logic, search logic, and protocol/IO logic. Do not add machine-learning or neural-network code during the classical-engine phase.
+Do not implement a feature before understanding its module boundary. Do not mix rule logic, search logic, and protocol/IO logic. The team has approved a neural-network evaluation (NNUE): it must stay CPU-only (no GPU at runtime), be optional behind a configuration switch with the classical evaluation as fallback, keep training code outside the engine runtime, and be promoted only after it beats the current engine in validation matches.
 
 ## Required Working Style
 

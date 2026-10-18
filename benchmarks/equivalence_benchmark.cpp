@@ -49,6 +49,9 @@ qas::State duplicate_hand_position() {
     for (int piece : {0, 1}) {
         state.board[state.pos[piece]] = -1;
         state.pos[piece] = static_cast<std::uint8_t>(qas::first_hand_slot + piece);
+        // A Lion-capable piece in the mover's hand means Catch already happened.
+        state.mask[piece] =
+            static_cast<qas::Mask>(state.mask[piece] & ~qas::bit(qas::Animal::Lion));
     }
     qas::recompute_hash(state);
     return state;

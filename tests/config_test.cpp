@@ -30,7 +30,18 @@ void test_json_overrides_each_config_section() {
             "reserve_memory_mb": 64,
             "benchmark_repeat_count": 3,
             "log_file_path": "test.csv",
-            "competition_mode": false
+            "competition_mode": false,
+            "qsearch_depth": 2,
+            "dfpn_guard_enabled": false,
+            "dfpn_guard_max_ply": 17,
+            "eval_v2_enabled": true,
+            "eval_v2_weights": [1, 2, 3],
+            "nnue_enabled": true,
+            "nnue_path": "other_nnue.txt",
+            "book_enabled": true,
+            "book_path": "other_book.txt",
+            "forbidden_enabled": true,
+            "forbidden_path": "other_forbidden.txt"
         })";
     }
 
@@ -48,6 +59,31 @@ void test_json_overrides_each_config_section() {
               config.instrumentation.log_file_path == "test.csv",
           "JSON overrides instrumentation configuration");
     check(!config.safety.competition_mode, "JSON overrides safety configuration");
+    check(config.search.qsearch_depth == 2 && !config.search.dfpn_guard_enabled &&
+              config.search.dfpn_guard_max_ply == 17,
+          "JSON overrides quiescence and df-pn guard configuration");
+    check(
+        config.search.eval_v2_enabled && config.search.eval_v2_weights == std::vector<int>{1, 2, 3},
+        "JSON overrides eval_v2 configuration");
+    check(config.search.nnue_enabled && config.search.nnue_path == "other_nnue.txt",
+          "JSON overrides NNUE configuration");
+    check(config.book.forbidden_enabled && config.book.forbidden_path == "other_forbidden.txt",
+          "JSON overrides forbidden-move configuration");
+    check(config.book.enabled && config.book.path == "other_book.txt",
+          "JSON overrides position-book configuration");
+}
+
+void test_contest_defaults_enable_new_search_features() {
+    const auto safe = qas::profile_config("contest_safe");
+    check(safe.search.qsearch_depth == 4 && safe.search.dfpn_guard_enabled &&
+              safe.search.dfpn_guard_max_ply == 23,
+          "contest_safe enables quiescence and the df-pn guard");
+    check(!safe.search.eval_v2_enabled && safe.search.eval_v2_weights.empty(),
+          "contest_safe keeps the legacy evaluation");
+    check(!safe.search.nnue_enabled, "contest_safe keeps NNUE disabled");
+    check(!safe.book.enabled && safe.book.path == "book/position_book.txt",
+          "contest_safe keeps the position book disabled");
+    check(!safe.book.forbidden_enabled, "contest_safe keeps the forbidden-move list disabled");
 }
 }  // namespace
 
@@ -75,6 +111,7 @@ int main() {
     check(!low.tt.auto_size_enabled && low.tt.size_mb <= 256, "low_ram has a bounded fixed TT");
 
     test_json_overrides_each_config_section();
+    test_contest_defaults_enable_new_search_features();
 
     qas::EngineConfig fixed = low;
     fixed.tt.size_mb = 128;

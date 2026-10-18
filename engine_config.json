@@ -14,7 +14,16 @@
     "l_eq_min_depth_remaining": 4,
     "l_eq_min_legal_count": 24,
     "l_eq_min_duplicate_ratio": 0.25,
-    "l_eq_require_duplicate_hand_hint": true
+    "l_eq_require_duplicate_hand_hint": true,
+    "qsearch_depth": 4,
+    "dfpn_guard_enabled": true,
+    "dfpn_guard_max_ply": 23,
+    "eval_v2_enabled": true,
+    "eval_v2_weights": [8, 1002, 425, -2581, 9703, -1048, 1883, 3413, 1326, -7200, 2534, 32114, -24964, 1514, -1103, 761, -1403, -1060, 1319, -20, 278, -278, 4662, 1427, 3601]
+  },
+  "book": {
+    "book_enabled": true,
+    "book_path": "book/position_book.txt"
   },
   "move_ordering": {
     "tt_move_ordering_enabled": true,

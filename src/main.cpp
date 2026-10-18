@@ -1,15 +1,24 @@
+#include <algorithm>
 #include <exception>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
+#include "book/forbidden_moves.hpp"
+#include "book/position_book.hpp"
 #include "core/config.hpp"
 #include "core/quantum_state.hpp"
 #include "exact/equivalence.hpp"
 #include "io/protocol.hpp"
 #include "search/alpha_beta.hpp"
+#include "search/diversify.hpp"
+#include "search/guarded_search.hpp"
 
 namespace {
 
@@ -250,22 +259,132 @@ qas::SearchOptions search_options(const qas::EngineConfig& config) {
         options.reducer_min_duplicate_ratio = config.search.l_eq_min_duplicate_ratio;
         options.reducer_disable_low_time = config.safety.disable_l_eq_when_low_time;
     }
+    options.qsearch_depth = config.search.qsearch_depth;
+    options.eval_v2_enabled = config.search.eval_v2_enabled;
+    if (config.search.eval_v2_weights.size() == options.eval_v2_weights.size())
+        std::copy(config.search.eval_v2_weights.begin(),
+                  config.search.eval_v2_weights.end(),
+                  options.eval_v2_weights.begin());
     return options;
+}
+
+/// @brief Maps runtime engine configuration to the concurrent df-pn guard.
+/// @param config Loaded engine configuration.
+/// @return Guard options.
+qas::GuardOptions guard_options(const qas::EngineConfig& config) {
+    qas::GuardOptions guard;
+    guard.enabled = config.search.dfpn_guard_enabled;
+    guard.max_ply = config.search.dfpn_guard_max_ply;
+    return guard;
+}
+
+/// @brief Lists where a data file may live: the configured path, then next to the executable.
+/// @param path Configured path.
+/// @param executable Path of the running executable.
+/// @return Candidate paths in lookup order.
+std::vector<std::filesystem::path> data_file_candidates(const std::string& path,
+                                                        const std::string& executable) {
+    const std::filesystem::path configured(path);
+    std::vector<std::filesystem::path> candidates{configured};
+    if (configured.is_relative() && !executable.empty())
+        candidates.push_back(std::filesystem::path(executable).parent_path() / configured);
+    return candidates;
+}
+
+/// @brief Loads the forbidden-move list when enabled; a missing file only disables it.
+/// @param config Loaded engine configuration.
+/// @param executable Path of the running executable, used to resolve a relative path.
+/// @return Loaded (possibly empty) list.
+qas::ForbiddenMoves load_forbidden(const qas::EngineConfig& config, const std::string& executable) {
+    qas::ForbiddenMoves forbidden;
+    if (!config.book.forbidden_enabled)
+        return forbidden;
+    std::string error;
+    for (const auto& candidate : data_file_candidates(config.book.forbidden_path, executable)) {
+        error.clear();
+        if (forbidden.load(candidate.string(), &error))
+            break;
+    }
+    if (config.instrumentation.stderr_log_enabled) {
+        std::cerr << "forbidden positions=" << forbidden.size();
+        if (!error.empty())
+            std::cerr << " (" << error << ')';
+        std::cerr << '\n';
+    }
+    return forbidden;
+}
+
+/// @brief Loads the NNUE weights when enabled; a missing or invalid file leaves it unloaded (v2
+/// only).
+/// @param config Loaded engine configuration.
+/// @param executable Path of the running executable, used to resolve a relative path.
+/// @param network Network to fill.
+void load_nnue(const qas::EngineConfig& config,
+               const std::string& executable,
+               qas::NnueNetwork& network) {
+    if (!config.search.nnue_enabled)
+        return;
+    std::string error;
+    for (const auto& candidate : data_file_candidates(config.search.nnue_path, executable)) {
+        error.clear();
+        if (network.load(candidate.string(), &error))
+            break;
+    }
+    if (config.instrumentation.stderr_log_enabled) {
+        std::cerr << "nnue=" << (network.loaded() ? "loaded" : "unavailable");
+        if (!error.empty())
+            std::cerr << " (" << error << ')';
+        std::cerr << '\n';
+    }
+}
+
+/// @brief Loads the position book when enabled; a missing file only disables the book.
+/// @param config Loaded engine configuration.
+/// @param executable Path of the running executable, used to resolve a relative book path.
+/// @return Loaded (possibly empty) book.
+qas::PositionBook load_book(const qas::EngineConfig& config, const std::string& executable) {
+    qas::PositionBook book;
+    if (!config.book.enabled)
+        return book;
+    std::string error;
+    for (const auto& candidate : data_file_candidates(config.book.path, executable)) {
+        error.clear();
+        if (book.load(candidate.string(), &error))
+            break;
+    }
+    if (config.instrumentation.stderr_log_enabled) {
+        std::cerr << "book entries=" << book.size();
+        if (!error.empty())
+            std::cerr << " (" << error << ')';
+        std::cerr << '\n';
+    }
+    return book;
 }
 
 /// @brief Runs the blocking JSON-line contest protocol loop.
 /// @param config Runtime engine configuration.
+/// @param executable Path of the running executable.
 /// @return Zero at end-of-input or one after a protocol error.
-int run_protocol(const qas::EngineConfig& config) {
+int run_protocol(const qas::EngineConfig& config, const std::string& executable) {
     const auto resources =
         qas::estimate_resources(config, sizeof(qas::TTEntry), 16, config.tt.max_size_mb);
     const std::size_t entries = std::max<std::size_t>(1, resources.tt_entry_count);
     qas::AlphaBetaEngine engine(entries);
     qas::SearchOptions options = search_options(config);
+    const qas::GuardOptions guard = guard_options(config);
     if (config.instrumentation.stderr_log_enabled) {
         std::cerr << "profile=" << config.profile << " tt_mb=" << resources.tt_size_mb
-                  << " tt_entries=" << entries << '\n';
+                  << " tt_entries=" << entries << " qsearch=" << options.qsearch_depth
+                  << " eval_v2=" << options.eval_v2_enabled
+                  << " dfpn_guard=" << (guard.enabled ? "on" : "off") << '\n';
     }
+    const qas::PositionBook book = load_book(config, executable);
+    const qas::ForbiddenMoves forbidden = load_forbidden(config, executable);
+    std::mt19937 random(std::random_device{}());  // only used by test-time opening diversification
+    qas::NnueNetwork network;
+    load_nnue(config, executable, network);
+    if (network.loaded() && options.eval_v2_enabled)
+        options.nnue = &network;
     std::string line;
     while (std::getline(std::cin, line)) {
         try {
@@ -274,8 +393,35 @@ int run_protocol(const qas::EngineConfig& config) {
                 std::cout << "\"OK\"" << std::endl;
                 continue;
             }
-            const auto result = engine.find_best_move(message.state, options);
-            int action = result.has_move ? qas::encode_action_move(result.best_move) : -1;
+            int action = -1;
+            const bool diversify = message.state.turn < config.search.opening_random_plies;
+            std::optional<qas::Move> random_move;
+            if (diversify) {
+                random_move = qas::diversified_move(engine,
+                                                    message.state,
+                                                    options,
+                                                    config.search.opening_random_depth,
+                                                    config.search.opening_random_margin,
+                                                    random);
+            }
+            if (random_move) {
+                action = qas::encode_action_move(*random_move);
+                if (config.instrumentation.stderr_log_enabled)
+                    std::cerr << "diversified opening move " << qas::move_string(*random_move)
+                              << '\n';
+            } else if (const auto book_move = book.lookup(message.state)) {
+                action = qas::encode_action_move(*book_move);
+                if (config.instrumentation.stderr_log_enabled)
+                    std::cerr << "book move " << qas::move_string(*book_move) << '\n';
+            } else {
+                options.root_excluded = forbidden.lookup(message.state);
+                if (!options.root_excluded.empty() && config.instrumentation.stderr_log_enabled)
+                    std::cerr << "forbidden moves excluded=" << options.root_excluded.size()
+                              << '\n';
+                const auto result =
+                    qas::guarded_find_best_move(engine, message.state, options, guard);
+                action = result.has_move ? qas::encode_action_move(result.best_move) : -1;
+            }
             if (!qas::action_is_allowed(message, action)) {
                 action = -1;
                 for (const qas::Move& move : qas::generate_legal_moves(message.state)) {
@@ -330,9 +476,23 @@ int main(int argc, char** argv) {
         else if (argument == "--benchmark-mode" && index + 1 < argc)
             benchmark_override = std::stoi(argv[++index]) != 0;
     }
+    // Without --config, look in the working directory first and then next to the executable, so the
+    // contest settings apply however the engine is launched.
+    if (!config_override && !std::filesystem::exists(config_path)) {
+        const auto beside = std::filesystem::path(argv[0]).parent_path() / config_path;
+        if (std::filesystem::exists(beside))
+            config_path = beside.string();
+    }
+    const bool config_found = std::filesystem::exists(config_path);
     qas::EngineConfig runtime_config;
     try {
         runtime_config = qas::load_engine_config(config_path, profile_override);
+        if (runtime_config.instrumentation.stderr_log_enabled) {
+            std::cerr << "config="
+                      << (config_found ? config_path
+                                       : std::string("(none found, profile defaults)"))
+                      << '\n';
+        }
     } catch (const std::exception& exception) {
         std::cerr << "config error: " << exception.what() << '\n';
         return 1;
@@ -345,7 +505,7 @@ int main(int argc, char** argv) {
         runtime_config.instrumentation.benchmark_mode_enabled = true;
     if (argc == 1 || !profile_override.empty() || config_override || tt_override != 0 ||
         benchmark_override) {
-        return run_protocol(runtime_config);
+        return run_protocol(runtime_config, argv[0]);
     }
     const std::string mode = argv[1];
     if (mode == "protocol") {
@@ -356,7 +516,7 @@ int main(int argc, char** argv) {
         }
         if (argc >= 4 && argv[3][0] != '-')
             runtime_config.search.max_depth = std::stoi(argv[3]);
-        return run_protocol(runtime_config);
+        return run_protocol(runtime_config, argv[0]);
     }
     if (mode == "demo") {
         demo(std::cout);

@@ -3,7 +3,12 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <random>
+#include <set>
 #include <string>
+#include <vector>
+
+#include "search/diversify.hpp"
 
 namespace {
 
@@ -74,6 +79,120 @@ void test_immediate_catch() {
     check(result.has_move, "Catch position returns a move");
     check(result.best_move == qas::Move{0, 4, 1}, "Alpha-Beta chooses immediate winning Catch");
     check(result.score >= qas::mate_score - 4, "Catch receives mate score");
+}
+
+qas::SearchResult depth_one(const qas::State& state, int qsearch_depth) {
+    qas::AlphaBetaEngine engine(1U << 16U);
+    qas::SearchOptions options;
+    options.max_depth = 1;
+    options.time_limit_ms = options.hard_time_limit_ms = options.soft_time_limit_ms = 60'000;
+    options.qsearch_depth = qsearch_depth;
+    return engine.find_best_move(state, options);
+}
+
+void test_quiescence_sees_the_recapture() {
+    // Opening exchange 7->4 looks like a free piece at depth 1 without quiescence, because the
+    // immediate recapture lies beyond the horizon; quiescence must resolve it.
+    const qas::State state = qas::initial_state();
+    const auto plain = depth_one(state, 0);
+    const auto resolved = depth_one(state, 4);
+    check(plain.score > resolved.score + 500, "quiescence lowers an unresolved-capture score");
+    check(is_legal(state, resolved.best_move), "quiescence search returns a legal move");
+}
+
+void test_quiescence_is_legal_and_non_mutating() {
+    qas::AlphaBetaEngine engine(1U << 16U);
+    const qas::State state = qas::initial_state();
+    for (int depth = 1; depth <= 4; ++depth) {
+        qas::SearchOptions options;
+        options.max_depth = depth;
+        options.time_limit_ms = options.hard_time_limit_ms = options.soft_time_limit_ms = 60'000;
+        options.qsearch_depth = 4;
+        const auto result = engine.find_best_move(state, options);
+        check(result.has_move && is_legal(state, result.best_move),
+              "quiescence depth search is legal");
+        check(result.stats.depth_reached == depth, "quiescence depth search completes");
+        check(state.hash == qas::zobrist_hash(state), "quiescence does not mutate the root");
+    }
+}
+
+void test_legacy_weights_match_optimized_eval() {
+    std::mt19937 random(20261012U);
+    std::vector<qas::Move> buffer;
+    int compared = 0;
+    for (int game = 0; game < 200; ++game) {
+        qas::State state = qas::initial_state();
+        for (int ply = 0; ply < 60 && state.terminal == qas::Terminal::None; ++ply) {
+            const auto features = qas::extract_eval_features(state, buffer);
+            qas::AlphaBetaEngine engine(1U << 10U);
+            if (qas::weighted_eval(features, qas::legacy_eval_weights()) !=
+                engine.evaluate(state)) {
+                check(false, "legacy weights reproduce the optimized evaluation");
+                return;
+            }
+            ++compared;
+            const auto legal = qas::generate_legal_moves(state);
+            qas::Undo undo;
+            qas::apply_move(state, legal[random() % legal.size()], undo);
+        }
+    }
+    check(compared > 300, "legacy-weight comparison covers many positions");
+
+    qas::SearchOptions options;
+    options.max_depth = 4;
+    options.qsearch_depth = 4;
+    options.time_limit_ms = options.hard_time_limit_ms = options.soft_time_limit_ms = 60'000;
+    qas::AlphaBetaEngine legacy(1U << 16U);
+    const auto expected = legacy.find_best_move(qas::initial_state(), options);
+    options.eval_v2_enabled = true;
+    qas::AlphaBetaEngine v2(1U << 16U);
+    const auto actual = v2.find_best_move(qas::initial_state(), options);
+    check(expected.best_move == actual.best_move && expected.score == actual.score,
+          "v2 search with legacy weights matches the legacy search");
+}
+
+void test_opening_diversification() {
+    const qas::State state = qas::initial_state();
+    qas::SearchOptions options;
+    options.qsearch_depth = 4;
+    qas::AlphaBetaEngine engine(1U << 16U);
+    std::mt19937 random(5);
+    std::set<std::pair<int, int>> seen;
+    for (int i = 0; i < 30; ++i) {
+        const auto move = qas::diversified_move(engine, state, options, 3, 100000, random);
+        check(move.has_value() && is_legal(state, *move), "diversified move is legal");
+        if (move)
+            seen.insert({move->from, move->to});
+    }
+    check(seen.size() > 1, "a wide margin produces different opening moves");
+    std::set<std::pair<int, int>> strict;
+    for (int i = 0; i < 10; ++i) {
+        const auto move = qas::diversified_move(engine, state, options, 3, 0, random);
+        if (move)
+            strict.insert({move->from, move->to});
+    }
+    check(!strict.empty() && strict.size() <= seen.size(),
+          "a zero margin keeps only top-scoring moves");
+}
+
+void test_root_exclusions() {
+    const qas::State state = qas::initial_state();
+    const auto legal = qas::generate_legal_moves(state);
+    qas::SearchOptions options;
+    options.max_depth = 3;
+    options.time_limit_ms = options.hard_time_limit_ms = options.soft_time_limit_ms = 60'000;
+    qas::AlphaBetaEngine engine(1U << 16U);
+    const auto unconstrained = engine.find_best_move(state, options);
+    options.root_excluded = {unconstrained.best_move};
+    qas::AlphaBetaEngine constrained(1U << 16U);
+    const auto avoided = constrained.find_best_move(state, options);
+    check(avoided.best_move != unconstrained.best_move && is_legal(state, avoided.best_move),
+          "an excluded root move is never chosen");
+    options.root_excluded = legal;
+    qas::AlphaBetaEngine all(1U << 16U);
+    const auto fallback = all.find_best_move(state, options);
+    check(fallback.has_move && is_legal(state, fallback.best_move),
+          "excluding every root move still returns a legal move");
 }
 
 void test_tt_preserves_value_and_hits() {
@@ -189,6 +308,11 @@ void test_turn_changes_search_key() {
 int main() {
     test_depths_are_legal_and_non_mutating();
     test_immediate_catch();
+    test_quiescence_sees_the_recapture();
+    test_quiescence_is_legal_and_non_mutating();
+    test_legacy_weights_match_optimized_eval();
+    test_opening_diversification();
+    test_root_exclusions();
     test_tt_preserves_value_and_hits();
     test_pvs_and_aspiration_equivalence();
     test_timeout_fallback();

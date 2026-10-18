@@ -106,6 +106,24 @@ năng Stage 5 riêng được check in, vì vậy không ghi một con số spee
 Giải thích nhập môn và ánh xạ từng thành phần vào bot web/native nằm tại
 [`bot_algorithms.md`](bot_algorithms.md).
 
+## Ứng Viên Đang Phát Triển (chưa promote)
+
+Working tree hiện có bốn thành phần mới, tắt/bật được qua cấu hình: quiescence và df-pn guard **bật**,
+eval_v2 và position book **bật** trong `engine_config.json` (mặc định profile vẫn tắt). Book hiện là
+"sổ lặp lại ván thắng" dựng từ log giải 0917/0928 (đối thủ đi tất định: 86/90 ván trùng nhau giữa hai giải). Chúng **chưa** đi qua pipeline đánh giá chuẩn (cần baseline theo luật mới trước).
+
+| Thành phần | Khoá cấu hình | Vai trò | Bằng chứng thử nghiệm (ngoài pipeline) |
+|---|---|---|---|
+| Quiescence | `qsearch_depth=4` | Ở horizon chỉ xét capture và nước đưa ứng viên Lion vào hàng Try, có stand-pat | +130 Elo (0,2 s/nước) và +91 Elo [+41, +145] (3 s/nước, 188 ván, cấu hình contest) so với bản hiện tại. Quiescence + guard vs bản gốc 3bf1758, 10 s/nước, 120 ván qua referee: +89 Elo [+27, +157] (đi trước +168, đi sau +17) |
+| df-pn guard song song | `dfpn_guard_enabled`, `dfpn_guard_max_ply=23` | Luồng df-pn chứng minh nước gốc nào để đối thủ thắng cưỡng bức và loại nó khỏi alpha-beta; dự trữ ~10% để search lại | Trên 75 thế cờ từ các ván thua: lựa chọn đã được chứng minh thua giảm từ 9 xuống 2 (trong 41 thế cờ chưa thua sẵn); thời gian quyết định tối đa 28,9 s |
+| Position book | `book_enabled`, `book_path` | Bảng thế cờ→nước tính trước ngoại tuyến (`tools/book_builder.cpp`), khoá chuẩn độc lập đánh số quân | Sinh từ thế cờ của giải 0917/0928; chỉ lưu các nước khác với nước bot đã đi. Bản mở rộng cho lượt đi sau không cải thiện khi kiểm chứng nên đang **tắt** |
+| Hàm chấm điểm tuyến tính v2 | `eval_v2_enabled`, `eval_v2_weights` | 25 yếu tố theo góc nhìn bên đi (thêm an toàn Sư tử: ô thoát, bảo vệ, áp lực, doạ thả quân; tách "thắng ngay"/"bị doạ"), trọng số dò bằng Texel trên tự đấu | Trọng số legacy khớp từng điểm với hàm cũ (test). Trọng số Texel: +138 Elo (0,2 s) và +97 Elo [+47, +151] (1 s) trong đấu nhanh không guard. Qua referee (10 s/nước, guard bật, 120 ván): +86 Elo [+24, +154], đi trước +260, đi sau −53 [−147, +35] |
+
+Giới hạn đã biết: df-pn guard cần luồng thứ hai (máy chấm cần ≥2 nhân để không chia thời gian với
+alpha-beta); phần lớn các ván thua ở giải được định đoạt bởi chuỗi dài hơn 25–35 nước, ngoài tầm
+của cả hai cơ chế trong 29 s. Hoà được ban tổ chức tính −0,5 cho cả hai bên; engine vẫn chấm hoà = 0
+(contempt đã cân nhắc và quyết định không dùng vì hoà chỉ xảy ra ở lượt 256).
+
 ## Việc Tiếp Theo Và Điều Kiện Promote
 
 Hiện không có candidate mới trong permanent registry. `Stage 5.1` trong ví dụ lệnh build/evaluation

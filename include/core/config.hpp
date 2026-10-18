@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace qas {
 
@@ -21,6 +22,27 @@ struct SearchConfig {
     std::size_t l_eq_min_legal_count{24};
     double l_eq_min_duplicate_ratio{0.25};
     bool l_eq_require_duplicate_hand_hint{true};
+    int qsearch_depth{4};           ///< Quiescence plies at the horizon; 0 disables quiescence.
+    bool dfpn_guard_enabled{true};  ///< Run the concurrent df-pn root guard.
+    int dfpn_guard_max_ply{23};     ///< df-pn proof horizon from each guarded root.
+    bool eval_v2_enabled{false};    ///< Use the linear feature evaluation.
+    std::vector<int>
+        eval_v2_weights{};     ///< Feature weights (x8); empty keeps the legacy-equivalent set.
+    bool nnue_enabled{false};  ///< Add the residual NNUE correction to eval_v2.
+    std::string nnue_path{"book/nnue.txt"};
+    /// Test-only (opponents in benchmarks, never the contest engine): for turns below this, play a
+    /// random move among those within `opening_random_margin` of the best fixed-depth score.
+    int opening_random_plies{0};
+    int opening_random_margin{150};
+    int opening_random_depth{5};
+};
+
+struct BookConfig {
+    bool enabled{
+        false};  ///< Off until a validated book exists (the second-seat book did not help).
+    std::string path{"book/position_book.txt"};
+    bool forbidden_enabled{false};  ///< Exclude offline-proven losing moves at the root.
+    std::string forbidden_path{"book/forbidden_moves.txt"};
 };
 
 struct MoveOrderingConfig {
@@ -88,6 +110,7 @@ struct EngineConfig {
     MemoryConfig memory{};
     InstrumentationConfig instrumentation{};
     SafetyConfig safety{};
+    BookConfig book{};
 };
 
 struct ResourceEstimate {

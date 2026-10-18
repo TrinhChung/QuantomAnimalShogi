@@ -73,6 +73,12 @@ class NativeBoundaryTests(unittest.TestCase):
             self.assertEqual(after["turn"], 1)
             self.assertEqual(after["side"], "north")
             self.assertEqual(len(after["protocol_request"]), len(after["protocol_request"]))
+            # Origin flags are absolute (is_from_first_player, is_from_second_player): at turn 1 the
+            # second player's own board pieces are its original pieces, so they must be flagged second.
+            entries = json.loads(after["protocol_request"])["observation"]["observation"]
+            mine_on_board = [entry for entry in entries[:12] if entry[7] == 1]
+            self.assertTrue(mine_on_board)
+            self.assertTrue(all(entry[5] == 0 and entry[6] == 1 for entry in mine_on_board))
 
     def test_corpus_generation_is_deterministic_and_openings_are_paired(self) -> None:
         with tempfile.TemporaryDirectory() as first_name, tempfile.TemporaryDirectory() as second_name:
@@ -95,7 +101,8 @@ class PersistenceAndRegistryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             copied = Path(name) / "corpus"
             shutil.copytree(ROOT / "evaluation" / "corpus", copied)
-            fixture_path = copied / "corpus-v1.jsonl"
+            manifest = json.loads((copied / "manifest.json").read_text(encoding="utf-8"))
+            fixture_path = copied / manifest["fixtures_file"]
             fixture_path.write_text(
                 fixture_path.read_text(encoding="utf-8") + "\n", encoding="utf-8"
             )
@@ -467,6 +474,8 @@ class StatisticalAndPolicyTests(unittest.TestCase):
                 )
         summary = summarize_games(games, [], "candidate", 10_000, 7)
         self.assertEqual(summary["champion"]["candidate_score"], 0.5)
+        self.assertEqual(summary["champion"]["candidate_contest_reward"], -0.5)
+        self.assertEqual(summary["champion"]["opponent_contest_reward"], -0.5)
         reliability = reliability_summary(summary)
         classification, gates = classify_candidate(
             change_category="performance_only",

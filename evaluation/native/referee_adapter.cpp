@@ -96,10 +96,12 @@ std::string protocol_request(const State& state, const std::vector<int>& actions
         entry[2] = qas::contains(state.mask[piece], Animal::Elephant) ? 1 : 0;
         entry[3] = qas::contains(state.mask[piece], Animal::Lion) ? 1 : 0;
         entry[4] = qas::contains(state.mask[piece], Animal::Hen) ? 1 : 0;
-        const bool own_origin = qas::originated_from(state, piece, perspective);
+        // Origin flags are absolute (docs/RULE_GAME.md 4.1: is_from_first_player, is_from_second_player);
+        // only the board orientation and the ownership flags are relative to the player to move.
+        const bool first_player_origin = qas::originated_from(state, piece, Side::South);
         const bool own_piece = qas::owned_by(state, piece, perspective);
-        entry[5] = own_origin ? 1 : 0;
-        entry[6] = own_origin ? 0 : 1;
+        entry[5] = first_player_origin ? 1 : 0;
+        entry[6] = first_player_origin ? 0 : 1;
         entry[7] = own_piece ? 1 : 0;
         entry[8] = own_piece ? 0 : 1;
     }

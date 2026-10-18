@@ -11,7 +11,14 @@ from .common import percentile
 
 
 def score_value(result: str) -> float:
+    """Zero-sum strength score used by every statistic (Elo-style; a draw is half a point)."""
     return {"win": 1.0, "draw": 0.5, "loss": 0.0}[result]
+
+
+# Organizer reward (docs/RULE_GAME.md section 8). Not zero-sum: both players receive -0.5 for a draw,
+# so it is reported alongside the strength statistics and never used for acceptance decisions.
+CONTEST_REWARD = {"win": 1.0, "draw": -0.5, "loss": -1.0}
+OPPONENT_RESULT = {"win": "loss", "draw": "draw", "loss": "win"}
 
 
 def _wilson_interval(mean: float, count: int, confidence: float) -> tuple[float, float]:
@@ -235,6 +242,18 @@ def summarize_games(
             "candidate_as_second_score": (
                 statistics.fmean(score_value(game["candidate_result"]) for game in candidate_second_games)
                 if candidate_second_games
+                else None
+            ),
+            "candidate_contest_reward": (
+                statistics.fmean(CONTEST_REWARD[game["candidate_result"]] for game in paired_games)
+                if paired_games
+                else None
+            ),
+            "opponent_contest_reward": (
+                statistics.fmean(
+                    CONTEST_REWARD[OPPONENT_RESULT[game["candidate_result"]]] for game in paired_games
+                )
+                if paired_games
                 else None
             ),
             "first_player_score": statistics.fmean(first_player_scores) if first_player_scores else None,

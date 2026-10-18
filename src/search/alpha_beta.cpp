@@ -375,6 +375,11 @@ void AlphaBetaEngine::store(
 bool AlphaBetaEngine::should_stop() {
     if (stopped_)
         return true;
+    if (options_.root_guard != nullptr &&
+        options_.root_guard->stop_search.load(std::memory_order_relaxed)) {
+        stopped_ = true;
+        return true;
+    }
     if (options_.stop_policy != nullptr &&
         options_.stop_policy(stats_.searched_nodes, options_.stop_context)) {
         stopped_ = true;
@@ -388,6 +393,9 @@ bool AlphaBetaEngine::should_stop() {
 }
 
 int AlphaBetaEngine::terminal_score(const State& state, int ply) const {
+    // The organizer rewards a draw with -0.5 for both players (docs/RULE_GAME.md section 8). Draws
+    // only occur at turn 256, so a contempt term was considered and deliberately not adopted; draw
+    // stays 0.
     if (state.terminal == Terminal::Draw)
         return 0;
     if (state.terminal == Terminal::Catch || state.terminal == Terminal::Try) {
@@ -597,6 +605,13 @@ int AlphaBetaEngine::evaluate(const State& state) const {
 int AlphaBetaEngine::evaluate_search(const State& state) {
     EvalComponentProfile* profile =
         options_.benchmark_instrumentation_enabled ? &stats_.eval_components : nullptr;
+    if (options_.eval_v2_enabled) {
+        if (state.terminal != Terminal::None)
+            return terminal_score(state, 0);
+        const int linear = weighted_eval(extract_eval_features(state, eval_scratch_.pseudo_moves),
+                                         options_.eval_v2_weights);
+        return options_.nnue != nullptr ? linear + options_.nnue->correction(state) : linear;
+    }
     if (!options_.benchmark_instrumentation_enabled) {
         return options_.optimized_eval_enabled ? evaluate_optimized(state, eval_scratch_, nullptr)
                                                : evaluate_baseline(state, nullptr);
@@ -787,8 +802,11 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
         return 0;
     if (state.terminal != Terminal::None)
         return terminal_score(state, ply);
-    if (depth == 0)
+    if (depth == 0) {
+        if (options_.qsearch_depth > 0)
+            return quiescence(state, alpha, beta, ply, options_.qsearch_depth);
         return evaluate_search(state);
+    }
 
     const int original_alpha = alpha;
     Move tt_move;
@@ -899,6 +917,68 @@ int AlphaBetaEngine::negamax(State& state, int depth, int alpha, int beta, int p
     return best;
 }
 
+int AlphaBetaEngine::quiescence(State& state, int alpha, int beta, int ply, int remaining) {
+    ++stats_.searched_nodes;
+    if (should_stop())
+        return 0;
+    if (state.terminal != Terminal::None)
+        return terminal_score(state, ply);
+    const int stand_pat = evaluate_search(state);
+    if (remaining <= 0 || stand_pat >= beta || ply >= static_cast<int>(kMaxSearchPly) - 1)
+        return stand_pat;
+    alpha = std::max(alpha, stand_pat);
+
+    // Noisy moves only: captures, plus board moves that bring a Lion candidate onto the Try rank.
+    const Side side = state.side_to_move;
+    const int try_row = side == Side::South ? 0 : board_height - 1;
+    auto& moves = move_pool_[static_cast<std::size_t>(ply)];
+    generate_pseudo_legal_moves(state, moves);
+    auto& scored = score_pool_[static_cast<std::size_t>(ply)];
+    scored.clear();
+    for (const Move& move : moves) {
+        const int target = state.board[move.to];
+        const bool capture = target >= 0;
+        const bool try_entry = !is_hand_position(move.from) &&
+                               contains(state.mask[move.piece], Animal::Lion) &&
+                               move.to / board_width == try_row;
+        if (!capture && !try_entry)
+            continue;
+        int priority = capture ? 1000 + expected_piece_value(state.mask[target]) : 500;
+        if (capture && contains(state.mask[target], Animal::Lion))
+            priority += 2000;
+        scored.emplace_back(priority, move);
+    }
+    std::stable_sort(scored.begin(), scored.end(), [](const auto& left, const auto& right) {
+        return left.first > right.first;
+    });
+    // Deeper plies use their own pools, so this ply's scored list stays valid while recursing.
+    for (std::size_t index = 0; index < scored.size(); ++index) {
+        const Move move = scored[index].second;
+        Undo undo;
+        if (!apply_search_move(state, move, undo))
+            continue;
+        const int score = -quiescence(state, -beta, -alpha, ply + 1, remaining - 1);
+        undo_move(state, undo);
+        if (stopped_)
+            return 0;
+        if (score >= beta)
+            return score;
+        alpha = std::max(alpha, score);
+    }
+    return alpha;
+}
+
+std::vector<Move> AlphaBetaEngine::root_exclusions() {
+    std::vector<Move> excluded = options_.root_excluded;
+    if (options_.root_guard != nullptr) {
+        std::lock_guard<std::mutex> lock(options_.root_guard->mutex);
+        excluded.insert(excluded.end(),
+                        options_.root_guard->excluded.begin(),
+                        options_.root_guard->excluded.end());
+    }
+    return excluded;
+}
+
 bool AlphaBetaEngine::search_root(
     State& state, int depth, int alpha, int beta, Move& best_move, int& best_score) {
     if (options_.benchmark_instrumentation_enabled)
@@ -916,9 +996,23 @@ bool AlphaBetaEngine::search_root(
     }
     auto& moves = move_pool_[0];
     generate_search_moves(state, tt_move, depth, 0, moves);
+    const std::vector<Move> excluded = root_exclusions();
+    if (!excluded.empty()) {
+        std::vector<Move> kept;
+        for (const Move& move : moves) {
+            if (std::find(excluded.begin(), excluded.end(), move) == excluded.end())
+                kept.push_back(move);
+        }
+        if (!kept.empty())  // when every move is excluded, keep searching all of them
+            moves.swap(kept);
+    }
     if (moves.empty())
         return true;
     order_moves(state, moves, tt_move, 0);
+    if (options_.root_guard != nullptr) {
+        std::lock_guard<std::mutex> lock(options_.root_guard->mutex);
+        options_.root_guard->root_order = moves;
+    }
     int best = -search_infinity;
     Move local_best = moves.front();
     bool first = true;
@@ -998,6 +1092,13 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
         return result;
     }
     result.best_move = fallback.front();
+    const std::vector<Move> excluded = root_exclusions();
+    for (const Move& move : fallback) {
+        if (std::find(excluded.begin(), excluded.end(), move) == excluded.end()) {
+            result.best_move = move;
+            break;
+        }
+    }
     result.has_move = true;
     result.pv_line = {result.best_move};
     result.score = evaluate_search(root);
@@ -1050,6 +1151,10 @@ SearchResult AlphaBetaEngine::find_best_move(const State& root, const SearchOpti
         if (!completed || stopped_)
             break;
         const auto depth_end = std::chrono::steady_clock::now();
+        if (options_.root_guard != nullptr) {
+            std::lock_guard<std::mutex> lock(options_.root_guard->mutex);
+            options_.root_guard->best = depth_move;
+        }
         result.best_move = depth_move;
         result.score = depth_score;
         result.pv_line = options_.benchmark_instrumentation_enabled ? pv_pool_[0]

@@ -20,9 +20,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(qas_core src/core/quantum_state.cpp src/core/config.cpp src/rules/game.cpp
-                     src/rules/state_text.cpp src/search/alpha_beta.cpp
-                     src/exact/equivalence.cpp src/io/protocol.cpp)
+                     src/rules/state_text.cpp src/search/alpha_beta.cpp src/search/dfpn.cpp src/search/eval_features.cpp src/search/nnue_features.cpp src/search/nnue.cpp src/search/diversify.cpp
+                     src/search/guarded_search.cpp src/exact/equivalence.cpp
+                     src/io/protocol.cpp src/book/position_book.cpp src/book/forbidden_moves.cpp)
 target_include_directories(qas_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+find_package(Threads REQUIRED)
+target_link_libraries(qas_core PUBLIC Threads::Threads)
 
 if(MSVC)
     target_compile_options(qas_core PRIVATE /W4 /permissive-)
@@ -32,6 +35,14 @@ endif()
 
 add_executable(qas src/main.cpp)
 target_link_libraries(qas PRIVATE qas_core)
+# Ship the data files and the contest configuration next to the executable so they resolve from any cwd.
+add_custom_command(
+    TARGET qas POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/book"
+            "$<TARGET_FILE_DIR:qas>/book"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/engine_config.json"
+            "$<TARGET_FILE_DIR:qas>/engine_config.json"
+    VERBATIM)
 
 # Evaluation-only application-boundary tools. These reuse the production rules and
 # search implementations but do not change the contest executable or its protocol.
@@ -104,6 +115,10 @@ if(WIN32)
     target_link_libraries(qas_stage35_benchmark PRIVATE psapi)
 endif()
 
+# Offline position-book builder (deep guarded analysis of saved positions).
+add_executable(qas_book_builder tools/book_builder.cpp)
+target_link_libraries(qas_book_builder PRIVATE qas_core)
+
 add_executable(qas_stage5_profile benchmarks/stage5_profile.cpp
                                    benchmarks/stage35_fixture.cpp)
 target_include_directories(qas_stage5_profile PRIVATE benchmarks)
@@ -126,6 +141,18 @@ if(BUILD_TESTING)
     add_executable(qas_equivalence_tests tests/successor_equivalence_test.cpp)
     target_link_libraries(qas_equivalence_tests PRIVATE qas_core)
     add_test(NAME successor_equivalence COMMAND qas_equivalence_tests)
+
+    add_executable(qas_dfpn_tests tests/dfpn_test.cpp)
+    target_link_libraries(qas_dfpn_tests PRIVATE qas_core)
+    add_test(NAME dfpn_guard COMMAND qas_dfpn_tests)
+
+    add_executable(qas_book_tests tests/book_test.cpp)
+    target_link_libraries(qas_book_tests PRIVATE qas_core)
+    add_test(NAME position_book COMMAND qas_book_tests)
+
+    add_executable(qas_nnue_tests tests/nnue_test.cpp)
+    target_link_libraries(qas_nnue_tests PRIVATE qas_core)
+    add_test(NAME nnue COMMAND qas_nnue_tests)
 
     add_executable(qas_protocol_tests tests/protocol_test.cpp)
     target_link_libraries(qas_protocol_tests PRIVATE qas_core)

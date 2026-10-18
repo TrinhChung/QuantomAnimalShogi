@@ -1,14 +1,18 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <utility>
 #include <vector>
 
 #include "rules/game.hpp"
+#include "search/eval_features.hpp"
+#include "search/nnue.hpp"
 
 namespace qas {
 
@@ -17,6 +21,16 @@ inline constexpr int search_infinity = 1'100'000;
 inline constexpr std::uint16_t kInvalidPackedMove = (std::numeric_limits<std::uint16_t>::max)();
 
 enum class BoundType : std::uint8_t { Exact, Lower, Upper };
+
+/// @brief Root-move information shared between alpha-beta and a concurrent proof-search guard.
+/// @note Alpha-beta writes `root_order` and `best`; the guard writes `excluded` and `stop_search`.
+struct RootGuard {
+    std::mutex mutex;
+    std::vector<Move> excluded;    ///< Root moves proven to lose by force.
+    std::vector<Move> root_order;  ///< Latest ordered root moves of the running iteration.
+    Move best{};                   ///< Best move of the last completed iteration.
+    std::atomic<bool> stop_search{false};
+};
 
 struct SuccessorReductionStats {
     std::uint64_t canonicalize_calls{0};
@@ -72,6 +86,18 @@ struct SearchOptions {
     bool reducer_disable_low_time{true};
     StopPolicy stop_policy{nullptr};
     void* stop_context{nullptr};
+    /// Maximum quiescence plies (captures and Try entries) searched at the horizon; 0 disables it.
+    int qsearch_depth{0};
+    /// Root moves never chosen unless every legal root move is listed.
+    std::vector<Move> root_excluded{};
+    /// Optional live exclusions and stop flag from a concurrent guard (not owned).
+    RootGuard* root_guard{nullptr};
+    /// Use the linear feature evaluation (`eval_features.hpp`) with these weights instead of the
+    /// legacy one.
+    bool eval_v2_enabled{false};
+    EvalWeights eval_v2_weights{legacy_eval_weights()};
+    /// Optional residual NNUE correction added to the v2 evaluation (not owned; v2 only).
+    const NnueNetwork* nnue{nullptr};
 };
 
 struct DepthReport {
@@ -270,6 +296,19 @@ class AlphaBetaEngine {
     /// @param ply Distance from the root.
     /// @return Node score, or zero when the search stops mid-node.
     int negamax(State& state, int depth, int alpha, int beta, int ply);
+
+    /// @brief Resolves captures and Try entries at the horizon with a stand-pat bound.
+    /// @param state Mutable node state restored after every child.
+    /// @param alpha Lower search-window bound.
+    /// @param beta Upper search-window bound.
+    /// @param ply Distance from the root.
+    /// @param remaining Remaining quiescence plies.
+    /// @return Node score from the side-to-move perspective, or zero when the search stops.
+    int quiescence(State& state, int alpha, int beta, int ply, int remaining);
+
+    /// @brief Collects static and guard-provided root exclusions.
+    /// @return Moves that must not be chosen at the root.
+    std::vector<Move> root_exclusions();
 
     /// @brief Searches all root moves inside one aspiration window.
     /// @param state Mutable root copy restored after every child.

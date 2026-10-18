@@ -12,7 +12,9 @@ from .common import EvaluationError, atomic_write_json, repository_root, sha256_
 from .referee import NativeReferee
 
 
-CORPUS_REVISION = 1
+# Revision 2 regenerates every fixture under the organizer's delayed-Try/Catch rules; revision 1
+# predates that rule change and stays on disk only for reproducing historical reports.
+CORPUS_REVISION = 2
 CORPUS_SEED = 0x51415335
 
 
@@ -65,7 +67,7 @@ def _random_nonterminal_snapshot(
     raise EvaluationError(f"could not generate deterministic nonterminal state at ply {plies}")
 
 
-def _stage35_fixture_states() -> list[tuple[str, str]]:
+def _stage35_fixture_states() -> list[tuple[str, str, list[int]]]:
     directory = repository_root() / "benchmarks" / "fixtures" / "stage35"
     selected = [
         "initial",
@@ -79,7 +81,7 @@ def _stage35_fixture_states() -> list[tuple[str, str]]:
         "safe_4ply",
         "safe_8ply",
     ]
-    fixtures: list[tuple[str, str]] = []
+    fixtures: list[tuple[str, str, list[int]]] = []
     for name in selected:
         path = directory / f"{name}.fixture"
         if not path.is_file():
@@ -87,8 +89,12 @@ def _stage35_fixture_states() -> list[tuple[str, str]]:
         text = path.read_text(encoding="utf-8")
         begin = text.find("state_begin\n")
         end = text.find("state_end", begin)
+        sequence: list[int] = []
+        for line in text[:begin].splitlines():
+            if line.startswith("move_sequence "):
+                sequence = [int(action) for action in line.split(" ", 1)[1].split(",") if action]
         if begin >= 0 and end >= 0:
-            fixtures.append((name, text[begin + len("state_begin\n") : end]))
+            fixtures.append((name, text[begin + len("state_begin\n") : end], sequence))
     return fixtures
 
 
@@ -98,14 +104,16 @@ def generate_corpus(referee_executable: Path, output_root: Path | None = None) -
     records: list[dict[str, Any]] = []
     hashes: set[int] = set()
     with NativeReferee(referee_executable) as referee:
-        for name, state_text in _stage35_fixture_states():
+        for name, state_text, sequence in _stage35_fixture_states():
             snapshot = referee.load(state_text)
             labels = ["correctness", "performance", "tactical"]
             if "initial" in name or "safe" in name:
                 labels.append("openings")
             if "catch" in name or "try" in name:
                 labels.append("tactical")
-            record = fixture_record(snapshot, name, "stage35_trusted_fixture", CORPUS_SEED, [], labels)
+            record = fixture_record(
+                snapshot, name, "stage35_trusted_fixture", CORPUS_SEED, sequence, labels
+            )
             if record["structural_hash"] not in hashes:
                 records.append(record)
                 hashes.add(record["structural_hash"])
@@ -144,7 +152,7 @@ def generate_corpus(referee_executable: Path, output_root: Path | None = None) -
             hashes.add(snapshot["state_hash"])
 
     records.sort(key=lambda fixture: fixture["fixture_id"])
-    fixtures_path = root / "corpus-v1.jsonl"
+    fixtures_path = root / f"corpus-v{CORPUS_REVISION}.jsonl"
     fixtures_path.write_text(
         "".join(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n" for record in records),
         encoding="utf-8",
